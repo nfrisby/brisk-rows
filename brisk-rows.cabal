@@ -1,0 +1,73 @@
+name:                brisk-rows
+version:             0.1.0.0
+synopsis:            A practical and inflexible implementation of row types
+-- description:
+license:             MIT
+copyright:           2022 Nicolas Frisby
+author:              Nicolas Frisby
+maintainer:          nicolas.frisby@tweag.io
+category:            Types
+build-type:          Simple
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+
+  exposed-modules:
+                       BriskRows
+                       BriskRows.Internal
+                       BriskRows.Internal.Ambiguous
+                       BriskRows.Internal.Util
+                       BriskRows.Motivation.Stage1
+                       BriskRows.Motivation.Stage2
+                       BriskRows.Motivation.Stage3
+                       BriskRows.Motivation.Stage4
+                       BriskRows.Motivation.Stage5
+
+  default-language:    Haskell2010
+  other-extensions:
+                       BangPatterns
+                       ConstraintKinds
+                       DataKinds
+                       DeriveAnyClass
+                       DeriveFunctor
+                       DeriveGeneric
+                       EmptyDataDecls
+                       FlexibleContexts
+                       FlexibleInstances
+                       FunctionalDependencies
+                       GADTs
+                       GeneralizedNewtypeDeriving
+                       KindSignatures
+                       LambdaCase
+                       MultiParamTypeClasses
+                       NamedFieldPuns
+                       OverloadedStrings
+                       PackageImports
+                       PolyKinds
+                       RankNTypes
+                       RecordWildCards
+                       ScopedTypeVariables
+                       StandaloneDeriving
+                       TemplateHaskell
+                       TupleSections
+                       TypeApplications
+                       TypeFamilies
+                       TypeFamilyDependencies
+                       TypeInType
+                       TypeOperators
+                       UndecidableInstances
+                       UndecidableSuperClasses
+                       ViewPatterns
+
+  build-depends:       base
+
+  ghc-options:         -Wall
+                       -Wcompat
+                       -Wincomplete-uni-patterns
+                       -Wincomplete-record-updates
+                       -Wpartial-fields
+                       -Widentities
+                       -Wredundant-constraints
+                       -Wmissing-export-lists
+                       -Wno-unticked-promoted-constructors
