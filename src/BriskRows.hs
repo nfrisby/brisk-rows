@@ -17,6 +17,7 @@ module BriskRows (
     ext, extend, extend#, extendProxy,
     prj, project, project#, projectProxy,
     rmv, remove, remove#, removeProxy,
+    removed, removed#, removedProxy,
     unextend, unextend#, unextendProxy,
     unremove, unremove#, unremoveProxy,
     -- * Folding over the record fields

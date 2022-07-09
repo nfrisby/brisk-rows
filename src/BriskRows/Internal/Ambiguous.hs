@@ -38,6 +38,13 @@ remove, rmv ::
 remove = remove# (proxy# @nm)
 rmv    = remove# (proxy# @nm)
 
+removed ::
+ forall nm row.
+    Present nm row
+ => Rcd row
+ -> (Lookup nm row, Rcd (Delete nm row))
+removed = removed# (proxy# @nm)
+
 unextend ::
  forall nm a row.
     Absent nm row

@@ -34,6 +34,7 @@ module BriskRows.Internal (
     extend#, extendProxy,
     project#, projectProxy,
     remove#, removeProxy,
+    removed#, removedProxy,
     unextend#, unextendProxy,
     unremove#, unremoveProxy,
     All,
@@ -349,12 +350,18 @@ type family DeleteCase (o :: Ordering) (nm :: Symbol) (x :: Symbol) (xv :: Type)
 
 class    PresentRow (nm :: Symbol) (row :: ROW) (err :: AssertLikeError) where
 
+  removedRow                          :: Proxy# err -> Proxy# nm -> Rcd row -> (Lookup nm row, Rcd (DeleteRow nm row err))
   removeRow                           :: Proxy# err -> Proxy# nm -> Rcd row -> Rcd (DeleteRow nm row err)
   unremoveRow                         :: Proxy# err -> Proxy# nm -> Rcd (DeleteRow nm row err) -> Lookup nm row -> Rcd row
 
 instance PresentCase (TL.CmpSymbol nm x) nm cols (IncomparableError nm x) =>
          PresentRow nm (Row (x ::: xv ': cols)) err where
 
+  removedRow _err nm (Cons x xv rcd)   =
+      removedCase
+        (proxy# @(TL.CmpSymbol nm x))
+        (proxy# @(IncomparableError nm x))
+        nm x xv rcd
   removeRow   _err nm (Cons x xv rcd)  =
       removeCase
         (proxy# @(TL.CmpSymbol nm x))
@@ -371,20 +378,25 @@ instance PresentCase (TL.CmpSymbol nm x) nm cols (IncomparableError nm x) =>
 
 class    PresentCase (o :: Ordering) (nm :: Symbol) (cols :: [COL]) (err :: AssertLikeError) where
 
-  removeCase                          :: Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> xv -> Rcd (Row cols) -> Rcd (DeleteCase o nm x xv cols err)
+  removedCase                         ::                            Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> xv -> Rcd (Row cols) -> (LookupCase o nm x xv cols err, Rcd (DeleteCase o nm x xv cols err))
+  removeCase                          ::                            Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> xv -> Rcd (Row cols) -> Rcd (DeleteCase o nm x xv cols err)
   unremoveCase                        :: (o ~ TL.CmpSymbol nm x) => Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> Rcd (DeleteCase o nm x xv cols err) -> Lookup nm (Row (x ::: xv ': cols)) -> (xv, Rcd (Row cols))
 
 instance PresentCase EQ nm cols err where
 
+  removedCase _eq _err _nm _x   xv rcd = (xv, rcd)
   removeCase   _eq _err _nm _x _xv rcd = rcd
   unremoveCase _eq _err  nm  x  rcd xv = eqSymbol nm x (xv, rcd)
 
 instance PresentRow nm (Row cols) () =>
          PresentCase GT nm cols err where
 
+  removedCase  _gt _err nm  x xv rcd   =
+      proofDelete nm (proxy# @(Row cols))
+    $ Cons x xv <$> removedRow (proxy# @()) nm rcd
   removeCase   _gt _err nm  x xv rcd   =
       proofDelete nm (proxy# @(Row cols))
-    $ Cons x xv $ removeRow (proxy# @()) nm rcd
+    $ Cons x xv  $  removeRow (proxy# @()) nm rcd
   unremoveCase _gt _err nm _x rcd a    =
       proofDelete nm (proxy# @(Row cols))
     $ let Cons _ xv rcd' = rcd in
@@ -419,6 +431,22 @@ removeProxy ::
  -> Rcd row
  -> Rcd (Delete nm row)
 removeProxy _prx = remove# (proxy# @nm)
+
+removed# ::
+ forall nm row.
+    Present nm row
+ => Proxy# nm
+ -> Rcd row
+ -> (Lookup nm row, Rcd (Delete nm row))
+removed# = removedRow (proxy# @(AbstractError "Delete" row))
+
+removedProxy ::
+ forall nm row proxy.
+    Present nm row
+ => proxy nm
+ -> Rcd row
+ -> (Lookup nm row, Rcd (Delete nm row))
+removedProxy _prx = removed# (proxy# @nm)
 
 unremove# ::
  forall nm row.
