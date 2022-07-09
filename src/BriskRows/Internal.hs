@@ -166,7 +166,7 @@ type family DelayedTypeErrorROW (msg :: TL.ErrorMessage) :: ROW where
 
 type AbstractError (fun :: Symbol) (row :: ROW) = DelayedTypeError (TL.Text "BriskRows." TL.:<>: TL.Text fun TL.:<>: TL.Text " must be applied to a concrete row, but its argument is abstract:" TL.:$$: TL.Text "    " TL.:<>: TL.ShowType row)
 
-type IncomparableError (fun :: Symbol) (nm :: Symbol) (x :: Symbol) = DelayedTypeError (TL.Text "BriskRows." TL.:<>: TL.Text fun TL.:<>: TL.Text " only supports orderable column names, but these two could not be compared:" TL.:$$: TL.Text "        " TL.:<>: TL.ShowType nm TL.:$$: TL.Text "    and " TL.:<>: TL.ShowType x)
+type IncomparableError (nm :: Symbol) (x :: Symbol) = DelayedTypeError (TL.Text "BriskRows.*" TL.:<>: TL.Text " only supports orderable column names, but these two could not be compared:" TL.:$$: TL.Text "        " TL.:<>: TL.ShowType nm TL.:$$: TL.Text "    and " TL.:<>: TL.ShowType x)
 
 -----
 
@@ -175,7 +175,7 @@ type IncomparableError (fun :: Symbol) (nm :: Symbol) (x :: Symbol) = DelayedTyp
 -- Unlike 'Insert' and 'Delete', this family can be applied to abstract rows.
 type family Lookup (nm :: Symbol) (row :: ROW) :: Type where
   Lookup nm (Row '[]               ) = TL.TypeError (TL.Text "Cannot Lookup absent column: " TL.:<>: TL.ShowType nm)
-  Lookup nm (Row (x ::: xv ': cols)) = LookupCase (TL.CmpSymbol nm x) nm x xv cols (IncomparableError "Lookup" nm x)
+  Lookup nm (Row (x ::: xv ': cols)) = LookupCase (TL.CmpSymbol nm x) nm x xv cols (IncomparableError nm x)
 
 type family LookupCase (o :: Ordering) (nm :: Symbol) (x :: Symbol) (xv :: Type) (cols :: [COL]) (err :: AssertLikeError) :: Type where
   LookupCase LT nm x xv cols err = TL.TypeError (TL.Text "Cannot Lookup absent column: " TL.:<>: TL.ShowType nm)
@@ -189,10 +189,10 @@ class    Project (nm :: Symbol) (row :: ROW) where
 
   project#                            :: Proxy# nm -> Rcd row -> Lookup nm row
 
-instance ProjectCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Lookup" nm x) =>
+instance ProjectCase (TL.CmpSymbol nm x) nm cols (IncomparableError nm x) =>
          Project nm (Row (x ::: xv ': cols)) where
 
-  project# nm (Cons x xv rcd)          = projectCase (proxy# @(TL.CmpSymbol nm x)) (proxy# @(IncomparableError "Lookup" nm x)) nm x xv rcd
+  project# nm (Cons x xv rcd)          = projectCase (proxy# @(TL.CmpSymbol nm x)) (proxy# @(IncomparableError nm x)) nm x xv rcd
 
 class    ProjectCase (o :: Ordering) (nm :: Symbol) (cols :: [COL]) (err :: AssertLikeError) where
 
@@ -223,7 +223,7 @@ type AlreadyInsertError (nm :: Symbol) = DelayedTypeErrorROW (TL.Text "Cannot In
 
 type family InsertRow (nm :: Symbol) (a :: Type) (row :: ROW) (err :: AssertLikeError) :: ROW where
   InsertRow nm a (Row '[])                err = Row '[nm ::: a]
-  InsertRow nm a (Row (x ::: xv ': cols)) err = InsertCase (TL.CmpSymbol nm x) nm a x xv cols (IncomparableError "Insert" nm x)
+  InsertRow nm a (Row (x ::: xv ': cols)) err = InsertCase (TL.CmpSymbol nm x) nm a x xv cols (IncomparableError nm x)
 
 type family InsertCase (o :: Ordering) (nm :: Symbol) (a :: Type) (x :: Symbol) (xv :: Type) (cols :: [COL]) (err :: AssertLikeError) :: ROW where
   InsertCase LT nm a x xv cols err = Row (nm ::: a ': x ::: xv ': cols)
@@ -240,13 +240,13 @@ instance AbsentRow nm (Row '[]) err_ where
   extendRow   _err nm a Nil              = Cons nm a Nil
   unextendRow _err _nm (Cons _ a Nil)    = (a, Nil)
 
-instance AbsentCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Insert" nm x) =>
+instance AbsentCase (TL.CmpSymbol nm x) nm cols (IncomparableError nm x) =>
          AbsentRow nm (Row (x ::: xv ': cols)) err_ where
 
   extendRow _err nm a (Cons x xv rcd)    =
        extendCase
           (proxy# @(TL.CmpSymbol nm x))
-          (proxy# @(IncomparableError "Insert" nm x))
+          (proxy# @(IncomparableError nm x))
           nm x a xv rcd
   unextendRow _err nm rcd                =
       (a, Cons x xv rcd')
@@ -256,7 +256,7 @@ instance AbsentCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Insert" nm x
       (xv, (a, rcd')) =
         unextendCase
           (proxy# @(TL.CmpSymbol nm x))
-          (proxy# @(IncomparableError "Insert" nm x))
+          (proxy# @(IncomparableError nm x))
           nm x rcd
 
 class    AbsentCase (o :: Ordering) (nm :: Symbol) (cols :: [COL]) (err :: AssertLikeError) where
@@ -340,7 +340,7 @@ type AlreadyDeleteError (nm :: Symbol) = DelayedTypeErrorROW (TL.Text "Cannot De
 
 type family DeleteRow (nm :: Symbol) (row :: ROW) (err :: AssertLikeError) :: ROW where
   DeleteRow nm (Row '[]               ) err = AlreadyDeleteError nm
-  DeleteRow nm (Row (x ::: xv ': cols)) err = DeleteCase (TL.CmpSymbol nm x) nm x xv cols (IncomparableError "Delete" nm x)
+  DeleteRow nm (Row (x ::: xv ': cols)) err = DeleteCase (TL.CmpSymbol nm x) nm x xv cols (IncomparableError nm x)
 
 type family DeleteCase (o :: Ordering) (nm :: Symbol) (x :: Symbol) (xv :: Type) (cols :: [COL]) (err :: AssertLikeError) :: ROW where
   DeleteCase LT nm x xv cols err = AlreadyDeleteError nm
@@ -352,19 +352,19 @@ class    PresentRow (nm :: Symbol) (row :: ROW) (err :: AssertLikeError) where
   removeRow                           :: Proxy# err -> Proxy# nm -> Rcd row -> Rcd (DeleteRow nm row err)
   unremoveRow                         :: Proxy# err -> Proxy# nm -> Rcd (DeleteRow nm row err) -> Lookup nm row -> Rcd row
 
-instance PresentCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Delete" nm x) =>
+instance PresentCase (TL.CmpSymbol nm x) nm cols (IncomparableError nm x) =>
          PresentRow nm (Row (x ::: xv ': cols)) err where
 
   removeRow   _err nm (Cons x xv rcd)  =
       removeCase
         (proxy# @(TL.CmpSymbol nm x))
-        (proxy# @(IncomparableError "Delete" nm x))
+        (proxy# @(IncomparableError nm x))
         nm x xv rcd
   unremoveRow _err nm rcd a            =
       uncurry (Cons x)
     $ unremoveCase
         (proxy# @(TL.CmpSymbol nm x))
-        (proxy# @(IncomparableError "Delete" nm x))
+        (proxy# @(IncomparableError nm x))
         nm x rcd a
     where
       x = proxy# @x
