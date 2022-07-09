@@ -54,17 +54,26 @@ module BriskRows.Internal (
     IncomparableError,
     -- ** Context stack
     InsertLeast,
-    cons,
     -- ** Workers
     LookupCase, ProjectCase,
     InsertRow, InsertCase, AbsentRow, AbsentCase, AlreadyInsertError,
     DeleteRow, DeleteCase, PresentRow, PresentCase, AlreadyDeleteError,
+    -- ** Axia
+    ProofRow,
+    proofInsert,
+    proofDelete,
   ) where
 
 import           Data.Kind (Constraint, Type)
 import           GHC.Exts (Proxy#, proxy#)
 import           GHC.TypeLits (Symbol)
 import qualified GHC.TypeLits as TL
+
+import           BriskRows.Internal.Util (needConstraint)
+
+import           Unsafe.Coerce (unsafeCoerce)
+
+-----
 
 infix 7 :::
 -- | A data kind for nice type-level syntax
@@ -114,12 +123,21 @@ type AssertLikeError = Type
 type family InsertLeast (x :: Symbol) (xv :: Type) (row :: ROW) :: ROW where
   InsertLeast x xv (Row cols) = Row (x ::: xv ': cols)
 
--- | REQUIREMENT @nm@ is less than the first column in @cols@ according to 'TL.CmpSymbol'
-cons :: Proxy# nm -> a -> Rcd row -> Rcd (InsertLeast nm a row)
-cons nm a rcd =
-    case rcd of
-      Nil    -> Cons nm a rcd
-      Cons{} -> Cons nm a rcd
+data ProofRow :: ROW -> Type where ProofRow :: ProofRow (Row cols)
+
+-- | An axiom about 'DeleteRow' and 'PresentRow'
+proofDelete :: forall nm cols ans. PresentRow nm (Row cols) () => Proxy# nm -> Proxy# (Row cols) -> (forall cols'. DeleteRow nm (Row cols) () ~ Row cols' => ans) -> ans
+proofDelete _nm _row k =
+    -- safe by definition of DeleteRow and PresentRow
+    let _ = needConstraint @(PresentRow nm (Row cols) ()) in
+    case unsafeCoerce (ProofRow @'[]) :: ProofRow (DeleteRow nm (Row cols) ()) of ProofRow -> k
+
+-- | An axiom about 'InsertRow' and 'AbsentRow'
+proofInsert :: forall nm a cols ans. AbsentRow nm (Row cols) () => Proxy# nm -> Proxy# a -> Proxy# (Row cols) -> (forall cols'. InsertRow nm a (Row cols) () ~ Row cols' => ans) -> ans
+proofInsert _nm _a _row k =
+    -- safe by definition of InsertRow and AbsentRow
+    let _ = needConstraint @(AbsentRow nm (Row cols) ()) in
+    case unsafeCoerce (ProofRow @'[]) :: ProofRow (InsertRow nm a (Row cols) ()) of ProofRow -> k
 
 -----
 
@@ -212,20 +230,25 @@ instance AbsentCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Insert" nm x
        extendCase
           (proxy# @(TL.CmpSymbol nm x))
           (proxy# @(IncomparableError "Insert" nm x))
-          nm a x xv rcd
+          nm x a xv rcd
 
 class    AbsentCase (o :: Ordering) (nm :: Symbol) (cols :: [COL]) (err :: AssertLikeError) where
 
-  extendCase                         :: Proxy# o -> Proxy# err -> Proxy# nm -> a -> Proxy# x -> xv -> Rcd (Row cols) -> Rcd (InsertCase o nm a x xv cols err)
+  extendCase                         :: Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> a -> xv -> Rcd (Row cols) -> Rcd (InsertCase o nm a x xv cols err)
 
 instance AbsentCase LT nm cols err where
 
-  extendCase _eq _err nm a x xv rcd   = Cons nm a $ Cons x xv rcd
+  extendCase _eq _err nm x a xv rcd   = Cons nm a $ Cons x xv rcd
 
 instance AbsentRow nm (Row cols) () =>
          AbsentCase GT nm cols err where
 
-  extendCase _gt _err nm a x xv rcd   = cons x xv $ extendRow (proxy# @()) nm a rcd
+  extendCase _gt _err nm x a xv rcd   =
+      proofInsert nm (proxyOf# a) (proxy# @(Row cols))
+    $ Cons x xv $ extendRow (proxy# @()) nm a rcd
+
+proxyOf# :: a -> Proxy# a
+proxyOf# _ = proxy#
 
 -----
 
@@ -294,7 +317,9 @@ instance PresentCase EQ nm cols err where
 instance PresentRow nm (Row cols) () =>
          PresentCase GT nm cols err where
 
-  removeCase _gt _err  nm  x  xv rcd = cons x xv $ removeRow (proxy# @()) nm rcd
+  removeCase _gt _err  nm  x  xv rcd =
+      proofDelete nm (proxy# @(Row cols))
+    $ Cons x xv $ removeRow (proxy# @()) nm rcd
 
 -----
 
