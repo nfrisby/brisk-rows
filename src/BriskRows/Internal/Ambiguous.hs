@@ -44,3 +44,11 @@ unextend ::
  => Rcd (Insert nm a row)
  -> (a, Rcd row)
 unextend = unextend# (proxy# @nm)
+
+unremove ::
+ forall nm row.
+    Present nm row
+ => Rcd (Delete nm row)
+ -> Lookup nm row
+ -> Rcd row
+unremove = unremove# (proxy# @nm)

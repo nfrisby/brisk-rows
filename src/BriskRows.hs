@@ -18,6 +18,7 @@ module BriskRows (
     prj, project, project#, projectProxy,
     rmv, remove, remove#, removeProxy,
     unextend, unextend#, unextendProxy,
+    unremove, unremove#, unremoveProxy,
     -- * Folding over the record fields
     All,
     Vec (VCons, VNil),
