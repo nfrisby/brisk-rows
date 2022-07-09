@@ -34,6 +34,7 @@ module BriskRows.Internal (
     extend#, extendProxy,
     project#, projectProxy,
     remove#, removeProxy,
+    unextend#, unextendProxy,
     All,
     N (S, Z),
     Vec (VCons, VNil),
@@ -62,6 +63,7 @@ module BriskRows.Internal (
     ProofRow,
     proofInsert,
     proofDelete,
+    unextendLeast,
   ) where
 
 import           Data.Kind (Constraint, Type)
@@ -138,6 +140,10 @@ proofInsert _nm _a _row k =
     -- safe by definition of InsertRow and AbsentRow
     let _ = needConstraint @(AbsentRow nm (Row cols) ()) in
     case unsafeCoerce (ProofRow @'[]) :: ProofRow (InsertRow nm a (Row cols) ()) of ProofRow -> k
+
+-- | Inverting 'InsertLeast'
+unextendLeast :: Rcd (InsertLeast x xv (Row cols)) -> Rcd (Row (x ::: xv ': cols))
+unextendLeast = id
 
 -----
 
@@ -217,38 +223,61 @@ type family InsertCase (o :: Ordering) (nm :: Symbol) (a :: Type) (x :: Symbol) 
 
 class    AbsentRow (nm :: Symbol) (row :: ROW) (err :: AssertLikeError) where
 
-  extendRow                          :: Proxy# err -> Proxy# nm -> a -> Rcd row -> Rcd (InsertRow nm a row err)
+  extendRow                             :: Proxy# err -> Proxy# nm -> a -> Rcd row -> Rcd (InsertRow nm a row err)
+  unextendRow                           :: Proxy# err -> Proxy# nm -> Rcd (InsertRow nm a row err) -> (a, Rcd row)
 
 instance AbsentRow nm (Row '[]) err_ where
 
-  extendRow _err nm a Nil             = Cons nm a Nil
+  extendRow   _err nm a Nil              = Cons nm a Nil
+  unextendRow _err _nm (Cons _ a Nil)    = (a, Nil)
 
 instance AbsentCase (TL.CmpSymbol nm x) nm cols (IncomparableError "Insert" nm x) =>
          AbsentRow nm (Row (x ::: xv ': cols)) err_ where
 
-  extendRow _err nm a (Cons x xv rcd) =
+  extendRow _err nm a (Cons x xv rcd)    =
        extendCase
           (proxy# @(TL.CmpSymbol nm x))
           (proxy# @(IncomparableError "Insert" nm x))
           nm x a xv rcd
+  unextendRow _err nm rcd                =
+      (a, Cons x xv rcd')
+    where
+      x = proxy# @x
+
+      (xv, (a, rcd')) =
+        unextendCase
+          (proxy# @(TL.CmpSymbol nm x))
+          (proxy# @(IncomparableError "Insert" nm x))
+          nm x rcd
 
 class    AbsentCase (o :: Ordering) (nm :: Symbol) (cols :: [COL]) (err :: AssertLikeError) where
 
-  extendCase                         :: Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> a -> xv -> Rcd (Row cols) -> Rcd (InsertCase o nm a x xv cols err)
+  extendCase                            :: Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> a -> xv -> Rcd (Row cols) -> Rcd (InsertCase o nm a x xv cols err)
+  unextendCase                          :: Proxy# o -> Proxy# err -> Proxy# nm -> Proxy# x -> Rcd (InsertCase o nm a x xv cols err) -> (xv, (a, Rcd (Row cols)))
 
 instance AbsentCase LT nm cols err where
 
-  extendCase _eq _err nm x a xv rcd   = Cons nm a $ Cons x xv rcd
+  extendCase   _eq _err  nm  x a xv rcd  = Cons nm a $ Cons x xv rcd
+  unextendCase _eq _err _nm _x      rcd' =
+      case rcd' of
+        Cons _ a (Cons _ xv rcd) -> (xv, (a, rcd))
 
 instance AbsentRow nm (Row cols) () =>
          AbsentCase GT nm cols err where
 
-  extendCase _gt _err nm x a xv rcd   =
+  extendCase   _gt _err nm x a xv rcd    =
       proofInsert nm (proxyOf# a) (proxy# @(Row cols))
     $ Cons x xv $ extendRow (proxy# @()) nm a rcd
+  unextendCase _gt                       = unextendCaseGT
 
 proxyOf# :: a -> Proxy# a
 proxyOf# _ = proxy#
+
+unextendCaseGT :: forall nm cols err x a xv. AbsentRow nm (Row cols) () => Proxy# err -> Proxy# nm -> Proxy# x -> Rcd (InsertCase GT nm a x xv cols err) -> (xv, (a, Rcd (Row cols)))
+unextendCaseGT _err nm _x rcd =
+    proofInsert nm (proxy# @a) (proxy# @(Row cols))
+  $ case unextendLeast rcd of
+      Cons _ xv rcd' -> (xv, unextendRow (proxy# @()) nm rcd')
 
 -----
 
@@ -279,6 +308,22 @@ extendProxy ::
  -> Rcd row
  -> Rcd (Insert nm a row)
 extendProxy _prx = extend# (proxy# @nm)
+
+unextend# ::
+ forall nm a row.
+    Absent nm row
+ => Proxy# nm
+ -> Rcd (Insert nm a row)
+ -> (a, Rcd row)
+unextend# = unextendRow (proxy# @(AbstractError "Insert" row))
+
+unextendProxy ::
+ forall nm a row proxy.
+    Absent nm row
+ => proxy nm
+ -> Rcd (Insert nm a row)
+ -> (a, Rcd row)
+unextendProxy _prx = unextend# (proxy# @nm)
 
 -----
 

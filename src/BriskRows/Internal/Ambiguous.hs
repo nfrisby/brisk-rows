@@ -37,3 +37,10 @@ remove, rmv ::
  -> Rcd (Delete nm row)
 remove = remove# (proxy# @nm)
 rmv    = remove# (proxy# @nm)
+
+unextend ::
+ forall nm a row.
+    Absent nm row
+ => Rcd (Insert nm a row)
+ -> (a, Rcd row)
+unextend = unextend# (proxy# @nm)
