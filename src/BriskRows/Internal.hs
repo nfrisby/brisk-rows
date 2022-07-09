@@ -72,6 +72,7 @@ module BriskRows.Internal (
 import           Data.Kind (Constraint, Type)
 import           Data.Type.Equality ((:~:)(Refl))
 import           GHC.Exts (Proxy#, proxy#)
+import qualified GHC.OverloadedLabels as OL
 import           GHC.TypeLits (Symbol)
 import qualified GHC.TypeLits as TL
 
@@ -474,6 +475,8 @@ type family (:&) (row :: ROW) (col :: COL) :: ROW where
 
 newtype Field (nm :: Symbol) (a :: Type) = Field a
 
+instance (sym ~ nm, a ~ b) => OL.IsLabel sym (a -> Field nm b) where fromLabel = Field
+
 infixl 7 .*
 (.*) ::
  forall nm a row.
@@ -488,11 +491,13 @@ infixl 7 ./
  forall nm row proxy.
     Present nm row
  => Rcd row
- -> proxy nm
+ -> Col nm
  -> Rcd (Delete nm row)
 rcd ./ _prx = remove# (proxy# @nm) rcd
 
 data Col (nm :: Symbol) = Col
+
+instance sym ~ nm => OL.IsLabel sym (Col nm) where fromLabel = Col
 
 -----
 
