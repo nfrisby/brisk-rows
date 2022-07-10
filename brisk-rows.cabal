@@ -17,6 +17,7 @@ library
                        BriskRows
                        BriskRows.Internal
                        BriskRows.Internal.Ambiguous
+                       BriskRows.Internal.Plugin
                        BriskRows.Internal.Util
                        BriskRows.Motivation.Stage1
                        BriskRows.Motivation.Stage2
@@ -61,6 +62,7 @@ library
                        ViewPatterns
 
   build-depends:       base
+                     , ghc < 9
 
   ghc-options:         -Wall
                        -Wcompat
