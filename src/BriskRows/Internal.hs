@@ -488,7 +488,7 @@ rcd .* Field a = extend# (proxy# @nm) a rcd
 
 infixl 7 ./
 (./) ::
- forall nm row proxy.
+ forall nm row.
     Present nm row
  => Rcd row
  -> Col nm
