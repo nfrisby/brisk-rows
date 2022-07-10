@@ -10,9 +10,11 @@ module BriskRows (
     ROW,
     -- * Records
     Absent,
+    Agree,
     Present,    
     Project,
     Rcd,
+    Union,
     emp, empty,
     ext, extend, extend#, extendProxy,
     prj, project, project#, projectProxy,
@@ -20,6 +22,7 @@ module BriskRows (
     removed, removed#, removedProxy,
     unextend, unextend#, unextendProxy,
     unremove, unremove#, unremoveProxy,
+    unmerge,
     -- * Folding over the record fields
     All,
     Vec (VCons, VNil),

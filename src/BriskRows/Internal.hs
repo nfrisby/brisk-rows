@@ -28,6 +28,7 @@ module BriskRows.Internal (
     Lookup,
     Nil,
     Absent,
+    Agree,
     Present,    
     Project,
     emp, empty,
@@ -37,6 +38,7 @@ module BriskRows.Internal (
     removed#, removedProxy,
     unextend#, unextendProxy,
     unremove#, unremoveProxy,
+    unmerge,
     All,
     N (S, Z),
     Vec (VCons, VNil),
@@ -150,6 +152,13 @@ proofInsert _nm _a _row k =
     -- safe by definition of InsertRow and AbsentRow
     let _ = needConstraint @(AbsentRow nm (Row cols) ()) in
     case unsafeCoerce (ProofRow @'[]) :: ProofRow (InsertRow nm a (Row cols) ()) of ProofRow -> k
+
+-- | An axiom about 'UnionRow' and 'AgreeRow'
+proofUnion :: forall lcols rcols ans. AgreeRow (Row lcols) (Row rcols) () => Proxy# (Row lcols) -> Proxy# (Row rcols) -> (forall cols'. UnionRow (Row lcols) (Row rcols) () ~ Row cols' => ans) -> ans
+proofUnion _l _r k =
+    -- safe by definition of UnionRow and AgreeRow
+    let _ = needConstraint @(AgreeRow (Row lcols) (Row rcols) ()) in
+    case unsafeCoerce (ProofRow @'[]) :: ProofRow (UnionRow (Row lcols) (Row rcols) ()) of ProofRow -> k
 
 -- | Inverting 'InsertLeast'
 unextendLeast :: Rcd (InsertLeast x xv (Row cols)) -> Rcd (Row (x ::: xv ': cols))
@@ -597,8 +606,8 @@ instance Ord a => OrdField (nm :: Symbol) (a :: Type)
 
 type CollisionError (nm :: Symbol) (l :: Type) (r :: Type) = DelayedTypeError (TL.Text "Cannot Union incompatible columns: " TL.:<>: TL.ShowType '(nm, l, r))
 
-type family SameType (l :: Type) (r :: Type) (err :: AssertLikeError) :: Type where
-  SameType a a err = a
+type family SameType (lv :: Type) (rv :: Type) (err :: AssertLikeError) :: Type where
+  SameType lv rv err = lv
 
 type family UnionRow (l :: ROW) (r :: ROW) (err :: AssertLikeError) :: ROW where
   UnionRow (Row '[]                ) (Row cols               ) err = Row cols
@@ -610,6 +619,62 @@ type family UnionCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]
   UnionCase EQ l lv lcols r rv rcols err = InsertLeast l (SameType lv rv (CollisionError l lv rv)) (UnionRow (Row lcols)               (Row rcols)               ())
   UnionCase GT l lv lcols r rv rcols err = InsertLeast r rv                                        (UnionRow (Row (l ::: lv ': lcols)) (Row rcols)               ())
 
+
+-----
+
+class    AgreeRow (l :: ROW) (r :: ROW) (err :: AssertLikeError) where
+  unmergeRow :: Proxy# err -> Rcd (UnionRow l r err) -> (Rcd l, Rcd r)
+
+instance AgreeRow (Row '[]         ) (Row '[]         ) err where unmergeRow _err Nil = (Nil, Nil)
+instance AgreeRow (Row (l ': lcols)) (Row '[]         ) err where unmergeRow _err l   = (l  , Nil)
+instance AgreeRow (Row '[]         ) (Row (r ': rcols)) err where unmergeRow _err r   = (Nil, r  )
+
+instance AgreeCase (TL.CmpSymbol l r) l lv lcols r rv rcols (IncomparableError l r) =>
+         AgreeRow (Row (l ::: lv ': lcols)) (Row (r ::: rv ': rcols)) err where
+  unmergeRow _err = unmergeCase (proxy# @(TL.CmpSymbol l r)) (proxy# @(IncomparableError l r))
+
+class    AgreeCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]) (r :: Symbol) (rv :: Type) (rcols :: [COL]) (err :: AssertLikeError) where
+  unmergeCase :: Proxy# o -> Proxy# err -> Rcd (UnionCase o l lv lcols r rv rcols (IncomparableError l r)) -> (Rcd (Row (l ::: lv ': lcols)), Rcd (Row (r ::: rv ': rcols)))
+
+instance AgreeRow (Row lcols) (Row (r ::: rv ': rcols)) () =>
+         AgreeCase LT l lv lcols r rv rcols err where
+  unmergeCase _lt _err rcd =
+      proofUnion (proxy# @(Row lcols)) (proxy# @(Row (r ::: rv ': rcols)))
+    $ case unextendLeast rcd of
+        Cons l lv rcd' ->
+          let
+            lrcd' :: Rcd (Row lcols)
+            rrcd' :: Rcd (Row (r ::: rv ': rcols))
+            (lrcd', rrcd') = unmergeRow (proxy# @()) rcd'
+          in
+          (Cons l lv lrcd', rrcd')
+
+instance (lv ~ rv, AgreeRow (Row lcols) (Row rcols) ()) =>
+         AgreeCase EQ x lv lcols x rv rcols err where
+  unmergeCase _eq _err rcd =
+      proofUnion (proxy# @(Row lcols)) (proxy# @(Row rcols))
+    $ case unextendLeast rcd of
+        Cons x xv rcd' ->
+          let
+            lrcd' :: Rcd (Row lcols)
+            rrcd' :: Rcd (Row rcols)
+            (lrcd', rrcd') = unmergeRow (proxy# @()) rcd'
+          in
+          (Cons x xv lrcd', Cons x xv rrcd')
+
+instance AgreeRow (Row (l ::: lv ': lcols)) (Row rcols) () =>
+         AgreeCase GT l lv lcols r rv rcols err where
+  unmergeCase _gt _err rcd =
+      proofUnion (proxy# @(Row (l ::: lv ': lcols))) (proxy# @(Row rcols))
+    $ case unextendLeast rcd of
+        Cons r rv rcd' ->
+          let
+            lrcd' :: Rcd (Row (l ::: lv ': lcols))
+            rrcd' :: Rcd (Row rcols)
+            (lrcd', rrcd') = unmergeRow (proxy# @()) rcd'
+          in
+          (lrcd', Cons r rv rrcd')
+
 -----
 
 -- | Union two rows
@@ -618,3 +683,13 @@ type family UnionCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]
 --
 -- It will also fail to reduce if the two rows have different types for the same column.
 type Union l r = UnionRow l r (AbstractError2 "Union" l r)
+
+-- | Require two rows agree
+--
+-- This constraint will immediately fail if the columns are not totally known; no row polymorphism is allowed.
+--
+-- It will also fail if the two rows have different types for the same column.
+type Agree l r = AgreeRow l r (AbstractError2 "Union" l r) :: Constraint
+
+unmerge :: forall l r. Agree l r => Rcd (Union l r) -> (Rcd l, Rcd r)
+unmerge = unmergeRow (proxy# @(AbstractError2 "Union" l r))
