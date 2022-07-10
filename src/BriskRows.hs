@@ -28,6 +28,7 @@ module BriskRows (
     Col (Col),
     Field (Field),
     (:&),
+    (:#),
     (.*),
     (./),
   ) where

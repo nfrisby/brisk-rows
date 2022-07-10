@@ -44,6 +44,7 @@ module BriskRows.Internal (
     Col (Col),
     Field (Field),
     (:&),
+    (:#),
     (.*),
     (./),
     Union,
@@ -475,9 +476,12 @@ unremoveProxy _prx = unremove# (proxy# @nm)
 
 -----
 
-infixl 7 :&
+infixl 5 :&
 type family (:&) (row :: ROW) (col :: COL) :: ROW where
   row :& nm ::: a = Insert nm a row
+
+infixl 5 :#
+type (row :: ROW) :# (nm :: Symbol) = Delete nm row
 
 newtype Field (nm :: Symbol) (a :: Type) = Field a
 
