@@ -46,6 +46,7 @@ module BriskRows.Internal (
     (:&),
     (.*),
     (./),
+    Intersect,
     Union,
     -- * Internals
     ROW (..),
@@ -63,6 +64,7 @@ module BriskRows.Internal (
     -- ** Workers
     LookupCase, ProjectCase,
     InsertRow, InsertCase, AbsentRow, AbsentCase, AlreadyInsertError,
+    IntersectRow, IntersectCase,
     DeleteRow, DeleteCase, PresentRow, PresentCase, AlreadyDeleteError,
     UnionRow, UnionCase,
     -- ** Axia
@@ -614,3 +616,24 @@ type family UnionCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]
 --
 -- It will also fail to reduce if the two rows have different types for the same column.
 type Union l r = UnionRow l r (AbstractError2 "Union" l r)
+
+-----
+
+type family IntersectRow (l :: ROW) (r :: ROW) (err :: AssertLikeError) :: ROW where
+  IntersectRow (Row '[]                ) (Row cols               ) err = Nil
+  IntersectRow (Row cols               ) (Row '[]                ) err = Nil
+  IntersectRow (Row (l ::: lv ': lcols)) (Row (r ::: rv ': rcols)) err = IntersectCase (TL.CmpSymbol l r) l lv lcols r rv rcols (IncomparableError l r)
+
+type family IntersectCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]) (r :: Symbol) (rv :: Type) (rcols :: [COL]) (err :: AssertLikeError) :: ROW where
+  IntersectCase LT l lv lcols r rv rcols err =                                                          IntersectRow (Row lcols)               (Row (r ::: rv ': rcols)) ()
+  IntersectCase EQ l lv lcols r rv rcols err = InsertLeast l (SameType lv rv (CollisionError l lv rv)) (IntersectRow (Row lcols)               (Row rcols)               ())
+  IntersectCase GT l lv lcols r rv rcols err =                                                          IntersectRow (Row (l ::: lv ': lcols)) (Row rcols)               ()
+
+-----
+
+-- | Intersect two rows
+--
+-- This family will fail to reduce if the columns are not totally known; no row polymorphism is allowed.
+--
+-- It will also fail to reduce if the two rows have different types for the same column.
+type Intersect l r = IntersectRow l r (AbstractError2 "Intersect" l r)
