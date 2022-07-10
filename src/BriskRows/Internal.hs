@@ -46,6 +46,7 @@ module BriskRows.Internal (
     (:&),
     (.*),
     (./),
+    Union,
     -- * Internals
     ROW (..),
     Rcd (..),
@@ -54,6 +55,8 @@ module BriskRows.Internal (
     DelayedTypeError,
     DelayedTypeErrorROW,
     AbstractError,
+    AbstractError2,
+    CollisionError,
     IncomparableError,
     -- ** Context stack
     InsertLeast,
@@ -61,6 +64,7 @@ module BriskRows.Internal (
     LookupCase, ProjectCase,
     InsertRow, InsertCase, AbsentRow, AbsentCase, AlreadyInsertError,
     DeleteRow, DeleteCase, PresentRow, PresentCase, AlreadyDeleteError,
+    UnionRow, UnionCase,
     -- ** Axia
     ProofRow,
     eqSymbol,
@@ -167,6 +171,8 @@ type family DelayedTypeErrorROW (msg :: TL.ErrorMessage) :: ROW where
   DelayedTypeErrorROW msg = TL.TypeError msg
 
 type AbstractError (fun :: Symbol) (row :: ROW) = DelayedTypeError (TL.Text "BriskRows." TL.:<>: TL.Text fun TL.:<>: TL.Text " must be applied to a concrete row, but its argument is abstract:" TL.:$$: TL.Text "    " TL.:<>: TL.ShowType row)
+
+type AbstractError2 (fun :: Symbol) (l :: ROW) (r :: ROW) = DelayedTypeError (TL.Text "BriskRows." TL.:<>: TL.Text fun TL.:<>: TL.Text " must be applied to a concrete row, but its one of these two arguments is abstract:" TL.:$$: TL.Text "        " TL.:<>: TL.ShowType l TL.:$$: TL.Text "    and " TL.:<>: TL.ShowType r)
 
 type IncomparableError (nm :: Symbol) (x :: Symbol) = DelayedTypeError (TL.Text "BriskRows.*" TL.:<>: TL.Text " only supports orderable column names, but these two could not be compared:" TL.:$$: TL.Text "        " TL.:<>: TL.ShowType nm TL.:$$: TL.Text "    and " TL.:<>: TL.ShowType x)
 
@@ -582,3 +588,29 @@ instance (    All EqField  (Row (col ': cols))
 
 class    Ord a => OrdField (nm :: Symbol) (a :: Type)
 instance Ord a => OrdField (nm :: Symbol) (a :: Type)
+
+-----
+
+type CollisionError (nm :: Symbol) (l :: Type) (r :: Type) = DelayedTypeError (TL.Text "Cannot Union incompatible columns: " TL.:<>: TL.ShowType '(nm, l, r))
+
+type family SameType (l :: Type) (r :: Type) (err :: AssertLikeError) :: Type where
+  SameType a a err = a
+
+type family UnionRow (l :: ROW) (r :: ROW) (err :: AssertLikeError) :: ROW where
+  UnionRow (Row '[]                ) (Row cols               ) err = Row cols
+  UnionRow (Row cols               ) (Row '[]                ) err = Row cols
+  UnionRow (Row (l ::: lv ': lcols)) (Row (r ::: rv ': rcols)) err = UnionCase (TL.CmpSymbol l r) l lv lcols r rv rcols (IncomparableError l r)
+
+type family UnionCase (o :: Ordering) (l :: Symbol) (lv :: Type) (lcols :: [COL]) (r :: Symbol) (rv :: Type) (rcols :: [COL]) (err :: AssertLikeError) :: ROW where
+  UnionCase LT l lv lcols r rv rcols err = InsertLeast l lv                                        (UnionRow (Row lcols)               (Row (r ::: rv ': rcols)) ())
+  UnionCase EQ l lv lcols r rv rcols err = InsertLeast l (SameType lv rv (CollisionError l lv rv)) (UnionRow (Row lcols)               (Row rcols)               ())
+  UnionCase GT l lv lcols r rv rcols err = InsertLeast r rv                                        (UnionRow (Row (l ::: lv ': lcols)) (Row rcols)               ())
+
+-----
+
+-- | Union two rows
+--
+-- This family will fail to reduce if the columns are not totally known; no row polymorphism is allowed.
+--
+-- It will also fail to reduce if the two rows have different types for the same column.
+type Union l r = UnionRow l r (AbstractError2 "Union" l r)
