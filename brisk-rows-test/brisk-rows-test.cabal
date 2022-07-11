@@ -2,7 +2,7 @@ name:                brisk-rows-test
 version:             0.1.0.0
 synopsis:            Testing brisk-rows
 -- description:
-license:             MIT
+license:             BSD-2-Clause
 copyright:           2022 Nicolas Frisby
 author:              Nicolas Frisby
 maintainer:          nicolas.frisby@tweag.io

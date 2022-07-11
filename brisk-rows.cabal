@@ -2,7 +2,7 @@ name:                brisk-rows
 version:             0.1.0.0
 synopsis:            A practical and inflexible implementation of row types
 -- description:
-license:             MIT
+license:             BSD-2-Clause
 copyright:           2022 Nicolas Frisby
 author:              Nicolas Frisby
 maintainer:          nicolas.frisby@tweag.io
