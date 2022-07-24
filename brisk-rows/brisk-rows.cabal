@@ -15,6 +15,7 @@ library
 
   exposed-modules:
                        BriskRows
+                       BriskRows.Plugin
                        BriskRows.RV
 
                        BriskRows.Internal
@@ -60,7 +61,7 @@ library
 
   build-depends:       base
                      , containers
-                     , ghc < 9
+                     , ghc >= 9
                      , ghc-prim
 
   ghc-options:         -Werror

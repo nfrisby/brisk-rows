@@ -4,7 +4,7 @@ module BriskRows.RV (
     module BriskRows,
     -- * Records
     Rcd,
-    del, del##, delPP,
+    del, del#, delP,
     emp,
     ins, ins#, insP,
     prj, prj#, prjP,
@@ -13,7 +13,7 @@ module BriskRows.RV (
     abd,
     cas, cas#, casP,
     inj, inj#, injP,
-    wkn, wkn##, wknPP,
+    wkn, wkn#, wknP,
     -- * Both
     lacking, lacking#, lackingP,
     ) where

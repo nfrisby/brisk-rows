@@ -1,5 +1,6 @@
 {-# LANGUAGE ConstraintKinds #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -185,17 +186,18 @@ instance Absent nm (Row# cols) => Absent_Ordering err GT nm cols
 
 type family Extend_Col (err :: Err) (col :: COL) (rho :: ROW) :: ROW
   where
-    Extend_Col err (nm := a) rho = Extend_Row# (TypeErr (AbstractROW rho)) nm a rho
+    Extend_Col err (nm := a) rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
+-- We intentionally put the @err@ argument after the @rho@ argument, so that GHC renders the deeper error
 type family Extend_Row#
-    ( err :: Err    )
     (  nm :: Symbol )
     (   a :: Type   )
     ( rho :: ROW    )
+    ( err :: Err    )
           :: ROW
   where
-    Extend_Row# err nm a (Row# '[]             ) = Row# '[nm := a]
-    Extend_Row# err nm a (Row# (x := b ': cols)) = Extend_Ordering (TypeErr (Incomparable nm x)) (CmpSymbol nm x) nm a x b cols
+    Extend_Row# nm a (Row# '[]             ) err = Row# '[nm := a]
+    Extend_Row# nm a (Row# (x := b ': cols)) err = Extend_Ordering (TypeErr (Incomparable nm x)) (CmpSymbol nm x) nm a x b cols
 
 type family Extend_Ordering
     (  err :: Err      )
@@ -209,7 +211,29 @@ type family Extend_Ordering
   where
     Extend_Ordering err LT nm a x b cols = Cons nm a (Cons x b (Row# cols))
     Extend_Ordering err EQ nm a x b cols = Cons nm a (Cons x b (Row# cols))
-    Extend_Ordering err GT nm a x b cols = Cons x b (Extend_Row# NoErr nm a (Row# cols))
+    Extend_Ordering err GT nm a x b cols = Cons x b (Extend_Row# nm a (Row# cols) NoErr)
+
+-----
+
+-- Restriction is essentially an implementation detail of the typechecker plugin, not exposed to the user
+
+type family Restrict (nm :: Symbol) (rho :: ROW) :: ROW
+  where
+    Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
+    Restrict nm (Row# (x := b ': cols)) = Restrict_Ordering (TypeErr (Incomparable nm x)) (CmpSymbol nm x) nm x b cols
+
+type family Restrict_Ordering
+    (  err :: Err      )
+    (    o :: Ordering )
+    (   nm :: Symbol   )
+    (    x :: Symbol   )
+    (    b :: Type     )
+    ( cols :: [COL]    )
+           :: ROW
+  where
+    Restrict_Ordering err LT nm x b cols = TypeError (NotFound nm)
+    Restrict_Ordering err EQ nm x b cols = Row# cols
+    Restrict_Ordering err GT nm x b cols = Cons x b (Restrict nm (Row# cols))
 
 -----
 
@@ -238,7 +262,7 @@ type family Select_Ordering
 -----
 
 -- | Extend the row by inserting the given column
-type Extend nm a rho = Extend_Row# (TypeErr (AbstractROW rho)) nm a rho
+type Extend nm a rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 infixl 5 :&
 

@@ -5,13 +5,14 @@
 {-# LANGUAGE TypeOperators #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
+{-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
 {-# OPTIONS_HADDOCK -not-home #-}
 
 module BriskRows.Internal.RV (
     -- * Records
     Rcd (Rcd#),
-    del##,
+    del#,
     emp,
     ins#,
     prj#,
@@ -20,7 +21,7 @@ module BriskRows.Internal.RV (
     abd,
     cas#,
     inj#,
-    wkn##,
+    wkn#,
     -- * Both
     lacking#,
     ) where
@@ -63,10 +64,8 @@ ins# = \nm a rcd ->
     Rcd# $ Sq.insertAt (knownLT nm rho) (unsafeCoerce a) sq
 
 -- | Restrict the record's row by deleting a field
---
--- Without a plugin, the type is ambiguous in @a@ without the second proxy argument.
-del## :: KnownLT nm rho => Proxy# nm -> Proxy# a -> Rcd (rho :& nm := a) -> Rcd rho
-del## = \nm _a rcd ->
+del# :: KnownLT nm rho => Proxy# nm -> Rcd (rho :& nm := a) -> Rcd rho
+del# = \nm rcd ->
     let Rcd# sq = rcd
         rcd'    = Rcd# $ Sq.deleteAt (knownLT nm (row# rcd')) sq
     in
@@ -108,10 +107,8 @@ cas# = \nm f g vrt ->
       GT -> g $ Vrt# a (i# -# 1#)
 
 -- | Restrict a variant continuation's row by weakening it no longer handle a specific case
---
--- Without a plugin, the type is ambiguous in @a@ without the second proxy argument.
-wkn## :: KnownLT nm rho => Proxy# nm -> Proxy# a -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
-wkn## = \nm _a f vrt ->
+wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
+wkn# = \nm f vrt ->
     let rho          = row# vrt
         !(Vrt# a i#) = vrt
     in

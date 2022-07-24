@@ -5,6 +5,8 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
+{-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
+
 {-# OPTIONS_HADDOCK -not-home #-}
 
 module BriskRows.Internal.RV.Ambiguous (
@@ -31,9 +33,9 @@ import           BriskRows.Internal.RV
 ins :: forall nm a rho. KnownLT nm rho => a -> Rcd rho -> Rcd (rho :& nm := a)
 ins = ins# (proxy# @nm)
 
--- | Alias of 'del##'
+-- | Alias of 'del#'
 del :: forall nm a rho. KnownLT nm rho => Rcd (rho :& nm := a) -> Rcd rho
-del = del## (proxy# @nm) (proxy# @a)
+del = del# (proxy# @nm)
 
 -- | Alias of 'prj#'
 prj :: forall nm rho. KnownLT nm rho => Rcd rho -> Select nm rho
@@ -45,9 +47,9 @@ prj = prj# (proxy# @nm)
 cas :: forall nm a rho ans. KnownLT nm rho => (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
 cas = cas# (proxy# @nm)
 
--- | Alias of 'wkn##'
+-- | Alias of 'wkn#'
 wkn :: forall nm a rho ans. KnownLT nm rho => (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
-wkn = wkn## (proxy# @nm) (proxy# @a)
+wkn = wkn# (proxy# @nm)
 
 -- | Alias of 'inj#'
 inj :: forall nm rho. KnownLT nm rho => Select nm rho -> Vrt rho
