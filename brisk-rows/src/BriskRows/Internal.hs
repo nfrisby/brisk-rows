@@ -61,6 +61,8 @@ type AbstractCOL (col :: COL k v) = Text "This column is not concrete! " :<>: Sh
 
 -----
 
+infix 7 :=
+
 data COL k v = k := v
 
 -- | The order of keys to use for 'ROW' types
