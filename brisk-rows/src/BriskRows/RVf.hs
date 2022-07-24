@@ -2,25 +2,26 @@
 
 module BriskRows.RVf (
     module BriskRows,
-    module BriskRows.Fields,
     -- * Records
     Rcd,
-    del, del#, delP,
+    del, del#, delP, (./),
     emp,
-    ins, ins#, insP,
+    ins, ins#, insP, (.*),
     prj, prj#, prjP,
     -- * Variants
     Vrt,
     abd,
-    cas, cas#, casP,
+    cas, cas#, casP, (.+),
     inj, inj#, injP,
-    wkn, wkn#, wknP,
+    wkn, wkn#, wknP, (.-),
     -- * Both
+    Name (Name),
+    col,
     lacking, lacking#, lackingP,
     ) where
 
 import           BriskRows
-import           BriskRows.Fields
 import           BriskRows.Internal.RVf
 import           BriskRows.Internal.RVf.Ambiguous
+import           BriskRows.Internal.RVf.Operators
 import           BriskRows.Internal.RVf.Proxy

@@ -28,6 +28,7 @@ library
 
                        BriskRows.Internal.RVf
                        BriskRows.Internal.RVf.Ambiguous
+                       BriskRows.Internal.RVf.Operators
                        BriskRows.Internal.RVf.Proxy
 
   default-language:    Haskell2010
