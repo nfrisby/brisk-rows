@@ -16,12 +16,18 @@ library
   exposed-modules:
                        BriskRows
                        BriskRows.Plugin
+                       BriskRows.Fields
                        BriskRows.RV
+                       BriskRows.RVf
 
                        BriskRows.Internal
                        BriskRows.Internal.RV
                        BriskRows.Internal.RV.Ambiguous
                        BriskRows.Internal.RV.Proxy
+
+                       BriskRows.Internal.RVf
+                       BriskRows.Internal.RVf.Ambiguous
+                       BriskRows.Internal.RVf.Proxy
 
   default-language:    Haskell2010
   other-extensions:
