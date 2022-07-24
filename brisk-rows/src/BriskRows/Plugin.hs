@@ -9,13 +9,14 @@
 -- | This typechecker plugin that rearranges 'BriskRow.ROW' equalities
 module BriskRows.Plugin (plugin) where
 
+import           Control.Applicative ((<|>))
 import           Data.Maybe (mapMaybe)
 
 import           GHC.Core.Reduction (Reduction (Reduction))
 import qualified GHC.Rename.Names as Rename
 import           GHC.Tc.Types.Constraint (Ct)
 import qualified GHC.Tc.Types.Constraint as Ct
-import           GHC.Plugins (TyCon, eqType)
+import           GHC.Plugins (TyCon, (<+>), eqType, text)
 import qualified GHC.Plugins as GhcPlugins
 import           GHC.Utils.Outputable (ppr)
 import           GHC.Driver.Ppr (showSDoc)
@@ -41,17 +42,18 @@ plugin = GhcPlugins.defaultPlugin
       , TcRnTypes.tcPluginRewrite = \env@Env{envCmpName} -> unitUFM envCmpName (rewriteCmpName env)
       , TcRnTypes.tcPluginSolve   = \env _evBindsVar gs ws -> do
 
+            doTrace env $ text $ "<<<<<<------"
+            doTrace env $ ppr $ gs <> ws
+            doTrace env $ text $ "<-----------"
+
             let recipes = mapMaybe (improve env) ws
+            doTrace env $ ppr recipes
 
-            asTypeOf (pure ()) $ do
-                dflags <- TcRnTypes.unsafeTcPluginTcM GhcPlugins.getDynFlags
-                TcPluginM.tcPluginIO $ putStrLn $ "<<<<<<------"
-                TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags $ ppr $ gs <> ws
-                TcPluginM.tcPluginIO $ putStrLn $ "------------"
-                TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags $ ppr recipes
-                TcPluginM.tcPluginIO $ putStrLn $ "------>>>>>>"
+            doTrace env $ text "----------->"
+            news <- mapM (newConstraint env ws) recipes
+            doTrace env $ text $ "------>>>>>>"
 
-            fmap (TcPluginOk [] . concat) $ mapM newConstraint recipes
+            pure $ TcPluginOk [] (concat news)
       }
   }
 
@@ -92,6 +94,8 @@ lookupDC tc s = case dcs of
 -----
 
 data Env = Env {
+    doTrace     :: GhcPlugins.SDoc -> TcPluginM ()
+  ,
     envCmpName  :: !TyCon
   ,
     envEQ       :: !TyCon
@@ -109,6 +113,11 @@ data Env = Env {
 
 newEnv :: TcPluginM Env
 newEnv = do
+    doTrace <- pure (\_x -> (pure ())) `asTypeOf` do
+      dflags <- TcRnTypes.unsafeTcPluginTcM GhcPlugins.getDynFlags
+      pure $ \x -> do
+        TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
+
     modul <- lookupModule "BriskRows.Internal"
     let luTC = lookupTC modul
 
@@ -171,21 +180,37 @@ data NewEquality = NewEquality !TcType !TcType
 
 data NewCtRecipe = NewCtRecipe !Ct ![NewEquality]
 
-newConstraint :: NewCtRecipe -> TcPluginM [Ct]
-newConstraint (NewCtRecipe old news) =
-    mapM each news
+newConstraint :: Env -> [Ct] -> NewCtRecipe -> TcPluginM [Ct]
+newConstraint env olds (NewCtRecipe old news) =
+    mapMaybe id <$> mapM each news
   where
-    each :: NewEquality -> TcPluginM Ct
-    each (NewEquality l r) = do
+    isOld :: NewEquality -> Maybe Ct
+    isOld =
+        foldl (\acc f new -> f new <|> acc new) (\_ -> Nothing)
+        [ \(NewEquality l r) ->
+            if (eqType l l' && eqType r r') || (eqType l r' && eqType r l')
+            then Just old'
+            else Nothing
+        | old' <- olds
+        , Predicate.EqPred Predicate.NomEq l' r' <- [Predicate.classifyPredType $ Ct.ctPred old']
+        ]
+
+    each :: NewEquality -> TcPluginM (Maybe Ct)
+    each new@(NewEquality l r)
+      | Just ct <- isOld new = do
+        doTrace env $ text "SKIPPING" <+> ppr (new, ct)
+        pure Nothing
+      | otherwise = do
         let loc = Ct.ctLoc old
             eq  = Predicate.mkPrimEqPred l r
-        fmap Ct.mkNonCanonical $ TcPluginM.newWanted loc eq
+        doTrace env $ text "EMITTING" <+> ppr eq
+        fmap (Just . Ct.mkNonCanonical) $ TcPluginM.newWanted loc eq
 
 instance GhcPlugins.Outputable NewEquality where
-  ppr (NewEquality lhs rhs) = GhcPlugins.text "NewEquality" GhcPlugins.<+> ppr (lhs, rhs)
+  ppr (NewEquality lhs rhs) = text "NewEquality" <+> ppr (lhs, rhs)
 
 instance GhcPlugins.Outputable NewCtRecipe where
-  ppr (NewCtRecipe old news) = GhcPlugins.text "NewCtRecipe" GhcPlugins.<+> ppr (old, news)
+  ppr (NewCtRecipe old news) = text "NewCtRecipe" <+> ppr (old, news)
 
 -----
 
