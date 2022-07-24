@@ -1,6 +1,7 @@
 module BriskRows (
     -- * Row types
     COL ((:=)),
+    CmpName,
     ROW,
     Emp,
     Extend, (:&),
@@ -8,6 +9,8 @@ module BriskRows (
     Absent,
     KnownLT,
     Lacks,
+    -- * Util
+    Lexico,
     ) where
 
 import           BriskRows.Internal

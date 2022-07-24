@@ -11,6 +11,7 @@ module BriskRows.Plugin (plugin) where
 
 import           Data.Maybe (mapMaybe)
 
+import           GHC.Core.Reduction (Reduction (Reduction))
 import qualified GHC.Rename.Names as Rename
 import           GHC.Tc.Types.Constraint (Ct)
 import qualified GHC.Tc.Types.Constraint as Ct
@@ -20,15 +21,16 @@ import           GHC.Utils.Outputable (ppr)
 import           GHC.Driver.Ppr (showSDoc)
 import           GHC.Utils.Panic (panicDoc)
 import qualified GHC.Core.Predicate as Predicate
+import qualified GHC.Core.TyCo.Rep as TyCoRep
 import qualified GHC.Tc.Types.Evidence as TcEvidence
 import           GHC.Tc.Plugin (TcPluginM)
 import qualified GHC.Tc.Plugin as TcPluginM
 import           GHC.Tc.Types (TcPluginSolveResult (..))
 import qualified GHC.Tc.Types as TcRnTypes
-import           GHC.Tc.Utils.TcType (TcType)
+import           GHC.Tc.Utils.TcType (TcKind, TcType)
 import qualified GHC.Tc.Utils.TcType as TcType
 import qualified GHC.Core.TyCon as TyCon
-import           GHC.Types.Unique.FM (emptyUFM)
+import           GHC.Types.Unique.FM (unitUFM)
 
 plugin :: GhcPlugins.Plugin
 plugin = GhcPlugins.defaultPlugin
@@ -36,7 +38,7 @@ plugin = GhcPlugins.defaultPlugin
   , GhcPlugins.tcPlugin        = \_args -> Just TcRnTypes.TcPlugin
       { TcRnTypes.tcPluginInit    = newEnv
       , TcRnTypes.tcPluginStop    = \_ -> pure ()
-      , TcRnTypes.tcPluginRewrite = \_env -> emptyUFM
+      , TcRnTypes.tcPluginRewrite = \env@Env{envCmpName} -> unitUFM envCmpName (rewriteCmpName env)
       , TcRnTypes.tcPluginSolve   = \env _evBindsVar gs ws -> do
 
             let recipes = mapMaybe (improve env) ws
@@ -90,6 +92,10 @@ lookupDC tc s = case dcs of
 -----
 
 data Env = Env {
+    envCmpName  :: !TyCon
+  ,
+    envEQ       :: !TyCon
+  ,
     envExtend   :: !TyCon
   ,
     envRestrict :: !TyCon
@@ -105,6 +111,10 @@ newEnv :: TcPluginM Env
 newEnv = do
     modul <- lookupModule "BriskRows.Internal"
     let luTC = lookupTC modul
+
+    envCmpName <- luTC "CmpName"
+
+    envEQ <- luTC "CmpNameEQ"
 
     envExtend <- luTC "Extend_Row#"
 
@@ -125,19 +135,35 @@ isExtend Env{envExtend} tc = tc == envExtend
 
 isRow :: Env -> TcType -> Bool
 isRow Env{envRow} ty = case TcType.tcSplitTyConApp_maybe ty of
-    Just (tc, [_cols]) -> envRow == tc
-    _                  -> False
+    Just (tc, [_k, _cols]) -> envRow == tc
+    _                      -> False
 
 isStop :: Env -> TcType -> Bool
 isStop Env{envStops} ty = case TcType.tcTyConAppTyCon_maybe ty of
     Just tc -> tc `elem` envStops
     _       -> False
 
-mkRestrict :: Env -> TcType -> TcType -> TcType
-mkRestrict Env{envRestrict} nm rho = TcType.mkTyConApp envRestrict [nm, rho]
+mkRestrict :: Env -> TcKind -> TcType -> TcType -> TcType
+mkRestrict Env{envRestrict} k nm rho = TcType.mkTyConApp envRestrict [k, nm, rho]
 
-mkSelect :: Env -> TcType -> TcType -> TcType
-mkSelect Env{envSelect} nm rho = TcType.mkTyConApp envSelect [nm, rho]
+mkSelect :: Env -> TcKind -> TcType -> TcType -> TcType
+mkSelect Env{envSelect} k nm rho = TcType.mkTyConApp envSelect [k, nm, rho]
+
+-----
+
+rewriteCmpName :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
+rewriteCmpName env _rwenv _gs args = case args of
+  [_k, l, r]
+    | l `eqType` r -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
+    | otherwise    -> pure TcRnTypes.TcPluginNoRewrite
+  _ -> fail "CmpName wrote arg count!"
+  where
+    Env{envCmpName, envEQ} = env
+
+    lhs = TcType.mkTyConApp envCmpName args
+    rhs = TcType.mkTyConTy envEQ
+
+    co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:CmpName.Refl") TyCon.Nominal lhs rhs
 
 -----
 
@@ -164,14 +190,14 @@ instance GhcPlugins.Outputable NewCtRecipe where
 -----
 
 data Extension =
-    -- | @Extend_Row# nm a rho _err@
-    Extend !TcType !TcType !TcType
+    -- | @Extend_Row# {k} nm a rho _err@
+    Extend !TcKind !TcType !TcType !TcType
 
 getExtend :: Env -> TcType -> Maybe Extension
 getExtend env ty = case TcType.tcSplitTyConApp_maybe ty of
-    Just (tc, [nm, a, rho, _err])
+    Just (tc, [k, nm, a, rho, _err])
       | isExtend env tc
-      -> Just $ Extend nm a rho
+      -> Just $ Extend k nm a rho
     _ -> Nothing
 
 -----
@@ -216,11 +242,11 @@ goInv env ext rhs acc =
       Nothing   ->
         if isStop env rho then Nothing else Just (NewEquality rho rhs' : acc')
   where
-    Extend nm a rho = ext
+    Extend k nm a rho = ext
 
-    acc' = NewEquality a (mkSelect env nm rhs) : acc
+    acc' = NewEquality a (mkSelect env k nm rhs) : acc
 
-    rhs' = mkRestrict env nm rhs
+    rhs' = mkRestrict env k nm rhs
 
 -- Two out of three is good enough!
 --
@@ -228,10 +254,11 @@ goInv env ext rhs acc =
 -- in "BriskRows.Internal.RV" etc.
 goInj :: Extension -> Extension -> Maybe [NewEquality]
 goInj lext rext
+  | not (lk `eqType` rk)                                      = Nothing
   | lnm `eqType` rnm && la `eqType` ra                        = Just [NewEquality lrho rrho]
   | lnm `eqType` rnm &&                    lrho `eqType` rrho = Just [NewEquality la   ra  ]
   |                     la `eqType` ra  && lrho `eqType` rrho = Just [NewEquality lnm  rnm ]
   | otherwise                                                 = Nothing
   where
-    Extend lnm la lrho = lext
-    Extend rnm ra rrho = rext
+    Extend lk lnm la lrho = lext
+    Extend rk rnm ra rrho = rext

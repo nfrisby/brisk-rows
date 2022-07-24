@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeOperators #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
@@ -36,10 +37,10 @@ import           BriskRows.Internal
 
 -----
 
-row# :: rOW (rho :: ROW) -> Proxy# rho
+row# :: rOW (rho :: ROW k) -> Proxy# rho
 row# _ = proxy#
 
-vrtRow# :: (Vrt (rho :: ROW) -> ans) -> Proxy# rho
+vrtRow# :: (Vrt (rho :: ROW k) -> ans) -> Proxy# rho
 vrtRow# _ = proxy#
 
 knownLT :: KnownLT nm rho => Proxy# nm -> Proxy# rho -> Int
@@ -48,11 +49,11 @@ knownLT = \nm rho -> I# (knownLT# nm rho)
 -----
 
 -- | A record
-newtype Rcd (rho :: ROW) =
+newtype Rcd (rho :: ROW k) =
     -- | INVARIANT Same order as the row
     Rcd# (Sq.Seq Any)
 
-emp :: Rcd Emp
+emp :: Rcd (Emp :: ROW k)
 emp = Rcd# Sq.empty
 
 -- | Extend the record's row by inserting another field
@@ -84,7 +85,7 @@ prj# = \nm rcd ->
 -----
 
 -- | A variant
-data Vrt (rho :: ROW) =
+data Vrt (rho :: ROW k) =
     -- | INVARIANT The integer is the value's index in the row
     --
     -- For the most-recently added column of a given name, this tag is
