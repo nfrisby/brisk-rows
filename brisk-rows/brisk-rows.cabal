@@ -23,6 +23,7 @@ library
                        BriskRows.Internal
                        BriskRows.Internal.RV
                        BriskRows.Internal.RV.Ambiguous
+                       BriskRows.Internal.RV.Operators
                        BriskRows.Internal.RV.Proxy
 
                        BriskRows.Internal.RVf
