@@ -59,5 +59,5 @@ inj = inj# (proxy# @nm)
 -----
 
 -- | Alias of 'lacking#'
-lacking :: forall nm rho f. Absent nm rho => f rho -> f rho
+lacking :: forall nm rho t. Absent nm rho => t rho -> t rho
 lacking = lacking# (proxy# @nm)

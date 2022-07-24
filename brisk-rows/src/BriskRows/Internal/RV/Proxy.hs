@@ -62,5 +62,5 @@ injP = \nm -> inj# (name# nm)
 -----
 
 -- | Alias of 'lacking#'
-lackingP :: Absent nm rho => name nm -> f rho -> f rho
+lackingP :: Absent nm rho => name nm -> t rho -> t rho
 lackingP = \nm -> lacking# (name# nm)

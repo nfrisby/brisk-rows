@@ -130,5 +130,5 @@ inj# = \nm a ->
 
 -----
 
-lacking# :: Absent nm rho => Proxy# nm -> f rho -> f rho
+lacking# :: Absent nm rho => Proxy# nm -> t rho -> t rho
 lacking# = \_nm -> id
