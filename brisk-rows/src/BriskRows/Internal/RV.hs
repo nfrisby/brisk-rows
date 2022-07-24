@@ -27,6 +27,7 @@ module BriskRows.Internal.RV (
     lacking#,
     ) where
 
+import           Data.Kind (Type)
 import qualified Data.Sequence as Sq
 import           GHC.Exts (Any, Proxy#, proxy#)
 import           GHC.Prim (Int#, (+#), (-#))
@@ -37,10 +38,10 @@ import           BriskRows.Internal
 
 -----
 
-row# :: rOW (rho :: ROW k) -> Proxy# rho
+row# :: rOW (rho :: ROW k Type) -> Proxy# rho
 row# _ = proxy#
 
-vrtRow# :: (Vrt (rho :: ROW k) -> ans) -> Proxy# rho
+vrtRow# :: (Vrt (rho :: ROW k Type) -> ans) -> Proxy# rho
 vrtRow# _ = proxy#
 
 knownLT :: KnownLT nm rho => Proxy# nm -> Proxy# rho -> Int
@@ -49,11 +50,11 @@ knownLT = \nm rho -> I# (knownLT# nm rho)
 -----
 
 -- | A record
-newtype Rcd (rho :: ROW k) =
+newtype Rcd (rho :: ROW k Type) =
     -- | INVARIANT Same order as the row
     Rcd# (Sq.Seq Any)
 
-emp :: Rcd (Emp :: ROW k)
+emp :: Rcd (Emp :: ROW k Type)
 emp = Rcd# Sq.empty
 
 -- | Extend the record's row by inserting another field
@@ -85,7 +86,7 @@ prj# = \nm rcd ->
 -----
 
 -- | A variant
-data Vrt (rho :: ROW k) =
+data Vrt (rho :: ROW k Type) =
     -- | INVARIANT The integer is the value's index in the row
     --
     -- For the most-recently added column of a given name, this tag is

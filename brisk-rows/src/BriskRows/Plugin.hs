@@ -135,19 +135,19 @@ isExtend Env{envExtend} tc = tc == envExtend
 
 isRow :: Env -> TcType -> Bool
 isRow Env{envRow} ty = case TcType.tcSplitTyConApp_maybe ty of
-    Just (tc, [_k, _cols]) -> envRow == tc
-    _                      -> False
+    Just (tc, [_k, _v, _cols]) -> envRow == tc
+    _                          -> False
 
 isStop :: Env -> TcType -> Bool
 isStop Env{envStops} ty = case TcType.tcTyConAppTyCon_maybe ty of
     Just tc -> tc `elem` envStops
     _       -> False
 
-mkRestrict :: Env -> TcKind -> TcType -> TcType -> TcType
-mkRestrict Env{envRestrict} k nm rho = TcType.mkTyConApp envRestrict [k, nm, rho]
+mkRestrict :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
+mkRestrict Env{envRestrict} k v nm rho = TcType.mkTyConApp envRestrict [k, v, nm, rho]
 
-mkSelect :: Env -> TcKind -> TcType -> TcType -> TcType
-mkSelect Env{envSelect} k nm rho = TcType.mkTyConApp envSelect [k, nm, rho]
+mkSelect :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
+mkSelect Env{envSelect} k v nm rho = TcType.mkTyConApp envSelect [k, v, nm, rho]
 
 -----
 
@@ -190,14 +190,14 @@ instance GhcPlugins.Outputable NewCtRecipe where
 -----
 
 data Extension =
-    -- | @Extend_Row# {k} nm a rho _err@
-    Extend !TcKind !TcType !TcType !TcType
+    -- | @Extend_Row# {k} {v} nm a rho _err@
+    Extend !TcKind !TcKind !TcType !TcType !TcType
 
 getExtend :: Env -> TcType -> Maybe Extension
 getExtend env ty = case TcType.tcSplitTyConApp_maybe ty of
-    Just (tc, [k, nm, a, rho, _err])
+    Just (tc, [k, v, nm, a, rho, _err])
       | isExtend env tc
-      -> Just $ Extend k nm a rho
+      -> Just $ Extend k v nm a rho
     _ -> Nothing
 
 -----
@@ -242,11 +242,11 @@ goInv env ext rhs acc =
       Nothing   ->
         if isStop env rho then Nothing else Just (NewEquality rho rhs' : acc')
   where
-    Extend k nm a rho = ext
+    Extend k v nm a rho = ext
 
-    acc' = NewEquality a (mkSelect env k nm rhs) : acc
+    acc' = NewEquality a (mkSelect env k v nm rhs) : acc
 
-    rhs' = mkRestrict env k nm rhs
+    rhs' = mkRestrict env k v nm rhs
 
 -- Two out of three is good enough!
 --
@@ -254,11 +254,11 @@ goInv env ext rhs acc =
 -- in "BriskRows.Internal.RV" etc.
 goInj :: Extension -> Extension -> Maybe [NewEquality]
 goInj lext rext
-  | not (lk `eqType` rk)                                      = Nothing
+  | not $ lk `eqType` rk && lv `eqType` rv                    = Nothing
   | lnm `eqType` rnm && la `eqType` ra                        = Just [NewEquality lrho rrho]
   | lnm `eqType` rnm &&                    lrho `eqType` rrho = Just [NewEquality la   ra  ]
   |                     la `eqType` ra  && lrho `eqType` rrho = Just [NewEquality lnm  rnm ]
   | otherwise                                                 = Nothing
   where
-    Extend lk lnm la lrho = lext
-    Extend rk rnm ra rrho = rext
+    Extend lk lv lnm la lrho = lext
+    Extend rk rv rnm ra rrho = rext

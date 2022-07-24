@@ -55,13 +55,13 @@ type NotFound (nm :: k) = Text "This column is not in the row! " :<>: ShowType n
 
 type NotAbsent (nm :: k) = Text "This column is not absent in the row! " :<>: ShowType nm
 
-type AbstractROW (rho :: ROW k) = Text "This row is not concrete! " :<>: ShowType rho
+type AbstractROW (rho :: ROW k v) = Text "This row is not concrete! " :<>: ShowType rho
 
-type AbstractCOL (col :: COL k) = Text "This column is not concrete! " :<>: ShowType col
+type AbstractCOL (col :: COL k v) = Text "This column is not concrete! " :<>: ShowType col
 
 -----
 
-data COL k = k := Type
+data COL k v = k := v
 
 -- | The order of keys to use for 'ROW' types
 --
@@ -75,21 +75,21 @@ type family CmpName (l :: k) (r :: k) :: Ordering
 type CmpNameEQ = EQ :: Ordering   -- for convenience of the plugin
 
 -- | The kind of a row type
-data ROW k =
+data ROW k v =
     -- | INVARIANT Non-descending, according to 'CmpName'
     --
     -- Of multiple columns with the same name, the leftmost is the most recently added.
     -- See 'Lacks'.
-    Row# [COL k]
+    Row# [COL k v]
 
 -- | The empty row
-type Emp = Row# '[] :: ROW k
+type Emp = Row# '[] :: ROW k v
 
 type family Cons
-    (  nm :: k     )
-    (   a :: Type  )
-    ( rho :: ROW k )
-          :: ROW k
+    (  nm :: k       )
+    (   a :: v       )
+    ( rho :: ROW k v )
+          :: ROW k v
   where
     Cons nm a (Row# cols) = Row# (nm := a ': cols)
 
@@ -218,7 +218,7 @@ instance KnownN n => KnownN (S n) where knownN# = \_n -> 1# +# knownN# (proxy# :
 -- | Key data enabling methods on records, variants, etc
 --
 -- See 'Lacks'.
-class KnownLT (nm :: k) (rho :: ROW k)
+class KnownLT (nm :: k) (rho :: ROW k v)
   where
     -- | The number of lesser columns in the row, according to 'CmpName'
     knownLT# :: Proxy# nm -> Proxy# rho -> Int#
@@ -240,10 +240,10 @@ instance
 
 class
     KnownLT_Ordering
-      (  err :: Err      )
-      (    o :: Ordering )
-      (   nm :: k        )
-      ( cols :: [COL k]  )
+      (  err :: Err       )
+      (    o :: Ordering  )
+      (   nm :: k         )
+      ( cols :: [COL k v] )
   where
     knownLT_Ordering :: Proxy# err -> Proxy# o -> Proxy# nm -> Proxy# cols -> Int#
 
@@ -276,7 +276,7 @@ type Lacks nm rho = (Absent nm rho, KnownLT nm rho)
 -- | There is no such column in the row
 --
 -- See 'Lacks'.
-class Absent (nm :: k) (rho :: ROW k)
+class Absent (nm :: k) (rho :: ROW k v)
 
 instance Absent nm (Row# '[])
 
@@ -284,7 +284,7 @@ instance
     Absent_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm cols
  => Absent nm (Row# (x := b ': cols))
 
-class Absent_Ordering (err :: Err) (o :: Ordering) (nm :: k) (cols :: [COL k])
+class Absent_Ordering (err :: Err) (o :: Ordering) (nm :: k) (cols :: [COL k v])
 
 instance Absent_Ordering err LT nm cols
 
@@ -294,30 +294,30 @@ instance Absent nm (Row# cols) => Absent_Ordering err GT nm cols
 
 -----
 
-type family Extend_Col (err :: Err) (col :: COL k) (rho :: ROW k) :: ROW k
+type family Extend_Col (err :: Err) (col :: COL k v) (rho :: ROW k v) :: ROW k v
   where
     Extend_Col err (nm := a) rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 -- We intentionally put the @err@ argument after the @rho@ argument, so that GHC renders the deeper error
 type family Extend_Row#
-    (  nm :: k      )
-    (   a :: Type   )
-    ( rho :: ROW k  )
-    ( err :: Err    )
-          :: ROW k
+    (  nm :: k       )
+    (   a :: v       )
+    ( rho :: ROW k v )
+    ( err :: Err     )
+          :: ROW k v
   where
     Extend_Row# nm a (Row# '[]             ) err = Row# '[nm := a]
     Extend_Row# nm a (Row# (x := b ': cols)) err = Extend_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm a x b cols
 
 type family Extend_Ordering
-    (  err :: Err      )
-    (    o :: Ordering )
-    (   nm :: k        )
-    (    a :: Type     )
-    (    x :: k        )
-    (    b :: Type     )
-    ( cols :: [COL k]  )
-           :: ROW k
+    (  err :: Err       )
+    (    o :: Ordering  )
+    (   nm :: (k :: Type))
+    (    a :: v         )
+    (    x :: k         )
+    (    b :: v         )
+    ( cols :: [COL k v] )
+           :: ROW k v
   where
     Extend_Ordering err LT nm a x b cols = Cons nm a (Cons x b (Row# cols))
     Extend_Ordering err EQ nm a x b cols = Cons nm a (Cons x b (Row# cols))
@@ -327,19 +327,19 @@ type family Extend_Ordering
 
 -- Restriction is essentially an implementation detail of the typechecker plugin, not exposed to the user
 
-type family Restrict (nm :: k) (rho :: ROW k) :: ROW k
+type family Restrict (nm :: k) (rho :: ROW k v) :: ROW k v
   where
     Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
     Restrict nm (Row# (x := b ': cols)) = Restrict_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
 
 type family Restrict_Ordering
-    (  err :: Err      )
-    (    o :: Ordering )
-    (   nm :: k        )
-    (    x :: k        )
-    (    b :: Type     )
-    ( cols :: [COL k]  )
-           :: ROW k
+    (  err :: Err       )
+    (    o :: Ordering  )
+    (   nm :: k         )
+    (    x :: k         )
+    (    b :: v         )
+    ( cols :: [COL k v] )
+           :: ROW k v
   where
     Restrict_Ordering err LT nm x b cols = TypeError (NotFound nm)
     Restrict_Ordering err EQ nm x b cols = Row# cols
@@ -351,19 +351,19 @@ type family Restrict_Ordering
 --
 -- If this multiple columns have the same name, it selects the type of the
 -- leftmost column. See 'Row#'.
-type family Select (nm :: k) (rho :: ROW k) :: Type
+type family Select (nm :: k) (rho :: ROW k v) :: v
   where
     Select nm (Row# '[]             ) = TypeError (NotFound nm)
     Select nm (Row# (x := b ': cols)) = Select_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
 
 type family Select_Ordering
-    (  err :: Err      )
-    (    o :: Ordering )
-    (   nm :: k        )
-    (    x :: k        )
-    (    b :: Type     )
-    ( cols :: [COL k]  )
-           :: Type
+    (  err :: Err       )
+    (    o :: Ordering  )
+    (   nm :: k         )
+    (    x :: k         )
+    (    b :: v         )
+    ( cols :: [COL k v] )
+           :: v
   where
     Select_Ordering err LT nm x b cols = TypeError (NotFound nm)
     Select_Ordering err EQ nm x b cols = b
