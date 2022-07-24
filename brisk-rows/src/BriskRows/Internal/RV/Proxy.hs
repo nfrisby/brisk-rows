@@ -51,7 +51,7 @@ prjP = \nm -> prj# (name# nm)
 casP :: KnownLT nm rho => proxy nm -> (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
 casP = \nm -> cas# (name# nm)
 
--- | Alias of 'wkn##'
+-- | Alias of 'wkn#'
 wknP :: KnownLT nm rho => name nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
 wknP = \nm -> wkn# (name# nm)
 
