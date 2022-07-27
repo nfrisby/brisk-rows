@@ -273,17 +273,15 @@ goInv env ext rhs acc =
 
     rhs' = mkRestrict env k v nm rhs
 
--- Two out of three is good enough!
---
 -- This simple treatment of just one layer suffices for the general definitions
 -- in "BriskRows.Internal.RV" etc.
 goInj :: Extension -> Extension -> Maybe [NewEquality]
 goInj lext rext
-  | not $ lk `eqType` rk && lv `eqType` rv                    = Nothing
-  | lnm `eqType` rnm && la `eqType` ra                        = Just [NewEquality lrho rrho]
-  | lnm `eqType` rnm &&                    lrho `eqType` rrho = Just [NewEquality la   ra  ]
-  |                     la `eqType` ra  && lrho `eqType` rrho = Just [NewEquality lnm  rnm ]
-  | otherwise                                                 = Nothing
+  | not $ lk `eqType` rk && lv `eqType` rv = Nothing
+
+  | lnm `eqType` rnm   = Just [NewEquality la ra, NewEquality lrho rrho]
+  | lrho `eqType` rrho = Just [NewEquality la ra, NewEquality lnm  rnm ]
+  | otherwise          = Nothing
   where
     Extend lk lv lnm la lrho = lext
     Extend rk rv rnm ra rrho = rext
