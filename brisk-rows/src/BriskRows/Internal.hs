@@ -24,6 +24,7 @@ module BriskRows.Internal (
     Select,
     -- * Row type constraints
     KnownLT (knownLT#),
+    KnownLen (knownLen#),
     Lacks,
     Absent,
     -- * Util
@@ -262,6 +263,21 @@ instance
  => KnownLT_Ordering err GT nm cols
   where
     knownLT_Ordering = \_err _o nm _cols -> 1# +# knownLT# nm (proxy# :: Proxy# (Row# cols))
+
+class KnownLen (rho :: ROW k v)
+  where
+    -- | The number of columns in the row
+    knownLen# :: Proxy# rho -> Int#
+
+instance KnownLen (Row# '[])
+  where
+    knownLen# = \_rho -> 0#
+
+instance
+    KnownLen (Row# cols)
+ => KnownLen (Row# (x := b ': cols))
+  where
+    knownLen# = \_rho -> 1# +# knownLen# (proxy# :: Proxy# (Row# cols))
 
 -----
 
