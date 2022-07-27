@@ -86,7 +86,7 @@ prj# = \nm rcd ->
 -----
 
 -- | A variant
-data Vrt (f :: k -> v -> Type) (rho :: ROW k Type) =
+data Vrt (f :: k -> v -> Type) (rho :: ROW k v) =
     -- | INVARIANT The integer is the value's index in the row
     --
     -- For the most-recently added column of a given name, this tag is
