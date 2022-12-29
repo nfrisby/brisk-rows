@@ -1,6 +1,12 @@
-{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
@@ -25,11 +31,13 @@ module BriskRows.Internal.RVf (
     asFldOf,
     idFldOf#,
     lacking#,
+    splat,
     ) where
 
 import           Data.Kind (Type)
-import           GHC.Exts (Proxy#)
+import           GHC.Exts (Proxy#, proxy#)
 
+import           BriskRows.Fields
 import           BriskRows.Internal
 import qualified BriskRows.Internal.RVtf as RVtf
 import qualified BriskRows.Internal.Sem as Sem
@@ -93,3 +101,39 @@ idFldOf# = \_f x -> x
 
 lacking# :: Absent nm rho => Proxy# nm -> t rho -> t rho
 lacking# = RVtf.lacking#
+
+-----
+
+splat ::
+  forall {l} {r} {fld1} {fld2} {rho}.
+    Splat (TypeErr (RVtf.NoSplat l r)) l r
+ => l (fld1 :->: fld2) rho
+ -> r fld1 rho
+ -> SplatF l r fld2 rho
+splat = splat# (proxy# @(TypeErr (RVtf.NoSplat l r)))
+
+type family SplatF (l :: (k -> v -> Type) -> ROW k v -> Type) (r :: (k -> v -> Type) -> ROW k v -> Type) (fld :: k -> v -> Type) (rho :: ROW k v) :: Type
+  where
+    SplatF Rcd Rcd fld rho =        Rcd fld rho
+    SplatF Rcd Vrt fld rho =        Vrt fld rho
+    SplatF Vrt Rcd fld rho =        Vrt fld rho
+    SplatF Vrt Vrt fld rho = Maybe (Vrt fld rho)
+
+class Splat (err :: Err) (l :: (k -> v -> Type) -> ROW k v -> Type) (r :: (k -> v -> Type) -> ROW k v -> Type)
+  where
+    splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
+
+type Lift fld = Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img
+
+unwrap ::
+     Sem.Sem (Lift (fld1 :->: fld2)) k v
+  -> Sem.Sem
+       (Lift fld1 Sem.:->: Lift fld2)
+       k
+       v
+unwrap = unA
+
+instance Splat err Rcd Rcd where splat# = \err (Rcd l) (Rcd r) -> Rcd $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
+instance Splat err Rcd Vrt where splat# = \err (Rcd l) (Vrt r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
+instance Splat err Vrt Rcd where splat# = \err (Vrt l) (Rcd r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
+instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> Vrt <$> RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r

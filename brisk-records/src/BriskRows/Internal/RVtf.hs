@@ -37,6 +37,8 @@ module BriskRows.Internal.RVtf (
     inj#,
     wkn#,
     -- * Both
+    NoSplat,
+    Splat (splat#),
     asFldOf,
     toFields,
     idFldOf#,
@@ -119,9 +121,6 @@ instance (Sem c nm a, AllCols c (Row# cols)) => AllCols c (Row# (nm := a ': cols
 pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. Sem fld nm a) -> Rcd fld rho
 pur# = \_fld f -> Rcd# $ Sq.replicate (I# (knownLen# (proxy# @rho))) (f @Any @Any)
 
-natro# :: Proxy# fld1 -> Proxy# fld2 -> (forall nm a. Sem fld1 nm a -> Sem fld2 nm a) -> Rcd fld1 rho -> Rcd fld2 rho
-natro# = \_fld1 _fld2 f (Rcd# sq) -> Rcd# $ f @Any @Any <$>  sq
-
 -----
 
 -- | A variant
@@ -130,7 +129,7 @@ data Vrt (fld :: Fld k v Type) (rho :: ROW k v) =
     --
     -- For the most-recently added column of a given name, this tag is
     -- equivalent to 'knownLT#'. See 'Row#'.
-    Vrt# !Any Int#
+    Vrt# !(Sem fld Any Any) Int#
 
 -- | An absurd value, since an empty variant is an empty type
 abd :: forall fld {ans}. Vrt fld Emp -> ans
@@ -182,6 +181,17 @@ lacking# = \_nm -> id
 
 -----
 
+class Fmap rv where
+  natro# :: Proxy# fld1 -> Proxy# fld2 -> (forall nm a. Sem fld1 nm a -> Sem fld2 nm a) -> rv fld1 rho -> rv fld2 rho
+
+instance Fmap Rcd where
+  natro# = \_fld1 _fld2 f (Rcd# sq) -> Rcd# $ f @Any @Any <$> sq
+
+instance Fmap Vrt where
+  natro# = \_fld1 _fld2 f (Vrt# a i) -> Vrt# (f @Any @Any a) i
+
+-----
+
 infixl 4 `splat`
 
 -- | Combine a 'Rcd' or 'Vrt' with a 'Rcd' or 'Vrt'
@@ -197,7 +207,7 @@ splat ::
  -> SplatF l r fld2 rho
 splat = splat# (proxy# @(TypeErr (NoSplat l r)))
 
-type NoSplat (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> ROW k v -> Type) =
+type NoSplat l r =
     Text "Each `splat' argument must be either Rcd or Vrt, but at least one of these types is neither:" :$$: (Text "        " :<>: ShowType l) :$$: (Text "    and " :<>: ShowType r)
 
 type family SplatF (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> ROW k v -> Type) (fld :: Fld k v Type) (rho :: ROW k v) :: Type
@@ -207,7 +217,7 @@ type family SplatF (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> 
     SplatF Vrt Rcd fld rho =        Vrt fld rho
     SplatF Vrt Vrt fld rho = Maybe (Vrt fld rho)
 
-class Splat (err :: Err) l r where splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
+class Splat (err :: Err) (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> ROW k v -> Type) where splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
 
 instance Splat err Rcd Rcd where splat# = \_err (Rcd# l)    (Rcd# r)    -> Rcd# $ Sq.zipWith unsafeCoerce l r
 instance Splat err Rcd Vrt where splat# = \_err (Rcd# l)    (Vrt# r i#) -> Vrt# (Sq.index l (I# i#) `unsafeCoerce` r) i#
