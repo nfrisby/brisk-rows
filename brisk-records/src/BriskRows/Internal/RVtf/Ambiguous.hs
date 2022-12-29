@@ -8,7 +8,7 @@
 
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK -not-home #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 module BriskRows.Internal.RVtf.Ambiguous (
     -- * Records

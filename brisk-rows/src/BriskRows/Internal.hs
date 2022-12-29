@@ -14,21 +14,28 @@
 
 {-# OPTIONS_HADDOCK not-home #-}
 
+-- | An internal module; do not rely on this interface.
+--
+-- See "BriskRows" instead.
 module BriskRows.Internal (
-    -- * Row types
+    -- * Rows
+    -- ** Kinds
     COL ((:=)),
-    CmpName,
     ROW (Row#),
+    -- ** Constructors
     Emp,
     Ext, (:&),
+    -- ** Queries
     Select,
-    -- * Row type constraints
+    -- ** Constraints
+    Absent,
     KnownLT (knownLT#),
     KnownLen (knownLen#),
     Lacks,
-    Absent,
-    -- * Util
+    -- * Name Order
+    CmpName,
     Lexico,
+    -- * Auxiliary
     Err,
     NoErr,
     TypeErr,
@@ -80,13 +87,23 @@ infix 7 :=
 -- See 'ROW'.
 data COL k v = k := v
 
--- | The order of keys to use for 'ROW' types
+-- | The order of column names
 --
--- The plugin adds reflexivity to this family. Relaying on the plugin is
--- preferable to adding a top-level refl case to 'CmpName' because such a case
--- would eg prevent the recursive 'Just' case from simplifying @Just (l :: ())
--- `CmpName` Just (r :: ())@. A plugin is necessary and sufficient specifically
--- because these are confluent paths to 'EQ'.
+-- Consider this order to be deterministic but arbitrary. It determines merely
+-- the order of columns within a row value. In general, you should write code
+-- (eg codecs) assuming this order may change over time.
+--
+-- If you define your own name kinds, you'll need to instantiate this family.
+-- Follow the pattern in the 'Either' instance for sums and the tuple instances
+-- for products. See 'Lexico'. __Do not__ declarive reflexive instances; let
+-- the plugin handle those.
+--
+-- The 'BriskRows.Plugin.plugin' adds reflexivity to this family. Relying on
+-- the plugin is preferable to adding a top-level refl case to 'CmpName'
+-- because such a case would eg prevent the recursive 'Just' case from
+-- simplifying @Just (l :: ()) ``CmpName`` Just (r :: ())@. A plugin is
+-- necessary and sufficient specifically because these are confluent paths to
+-- 'EQ'.
 type family CmpName (l :: k) (r :: k) :: Ordering
 
 type CmpNameEQ = EQ :: Ordering   -- for convenience of the plugin
@@ -95,8 +112,8 @@ type CmpNameEQ = EQ :: Ordering   -- for convenience of the plugin
 data ROW k v =
     -- | INVARIANT Non-descending, according to 'CmpName'
     --
-    -- Of multiple columns with the same name, the leftmost is the most recently added.
-    -- See 'Lacks'.
+    -- Of multiple columns with the same name, the outermost is the most
+    -- recently added. See 'Lacks'.
     Row# [COL k v]
 
 -- | The empty row
@@ -114,6 +131,9 @@ type family Cons
 
 infixl `Lexico`
 
+-- | Lexicographic ordering
+--
+-- Use this when defining new instances of 'CmpName' for product types.
 type family Lexico (l :: Ordering) (r :: Ordering) :: Ordering
   where
     Lexico LT _ = LT
@@ -205,6 +225,8 @@ type instance CmpName @(k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k
 
 -- | Key data enabling methods on records, variants, etc
 --
+-- This class is /closed/; do not add more instances.
+--
 -- See 'Lacks'.
 class KnownLT (nm :: k) (rho :: ROW k v)
   where
@@ -249,6 +271,9 @@ instance
   where
     knownLT_Ordering = \_err _o nm _cols -> 1# +# knownLT# nm (proxy# :: Proxy# (Row# cols))
 
+-- | More data enabling methods on records, variants, etc
+--
+-- This class is /closed/; do not add more instances.
 class KnownLen (rho :: ROW k v)
   where
     -- | The number of columns in the row
@@ -277,6 +302,8 @@ instance
 type Lacks nm rho = (Absent nm rho, KnownLT nm rho)
 
 -- | There is no such column in the row
+--
+-- This class is /closed/; do not add more instances.
 --
 -- See 'Lacks'.
 class Absent (nm :: k) (rho :: ROW k v)
@@ -328,8 +355,8 @@ type family Extend_Ordering
 
 -----
 
--- Restriction is essentially an implementation detail of the typechecker plugin, not exposed to the user
-
+-- | Restriction is essentially an implementation detail of the typechecker
+-- plugin, not exposed to the user
 type family Restrict (nm :: k) (rho :: ROW k v) :: ROW k v
   where
     Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
@@ -350,10 +377,9 @@ type family Restrict_Ordering
 
 -----
 
--- | The type of this column in the row
+-- | The image of this name in the row
 --
--- If this multiple columns have the same name, it selects the type of the
--- leftmost column. See 'Row#'.
+-- If multiple columns have the same name, it selects the outermost.
 type family Select (nm :: k) (rho :: ROW k v) :: v
   where
     Select nm (Row# '[]             ) = TypeError (NotFound nm)
@@ -382,4 +408,6 @@ type Ext nm a rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 infixl 5 :&
 
 -- | Operator alias of 'Ext'
+--
+-- This let's you write @rho ':&' nm ':=' a@ instead of @'Ext' nm a rho@.
 type row :& col = Extend_Col (TypeErr (AbstractCOL col)) col row

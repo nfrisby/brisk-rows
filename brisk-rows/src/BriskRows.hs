@@ -1,15 +1,21 @@
+-- | The user interface for row types.
 module BriskRows (
-    -- * Row types
+    -- * Rows
+    -- ** Kinds
     COL ((:=)),
-    CmpName,
     ROW,
+    -- ** Constructors
     Emp,
     Ext, (:&),
-    -- * Row type constraints
+    -- ** Queries
+    Select,
+    -- ** Constraints
     Absent,
     KnownLT,
+    KnownLen,
     Lacks,
-    -- * Util
+    -- * Name Order
+    CmpName,
     Lexico,
     ) where
 
