@@ -6,9 +6,9 @@
 
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK not-home #-}
+{-# OPTIONS_HADDOCK -not-home #-}
 
-module BriskRows.Internal.RV.Proxy (
+module BriskRows.Internal.RVtf.Proxy (
     -- * Records
     delP,
     insP,
@@ -24,7 +24,8 @@ module BriskRows.Internal.RV.Proxy (
 import           GHC.Exts (Proxy#, proxy#)
 
 import           BriskRows.Internal
-import           BriskRows.Internal.RV
+import           BriskRows.Internal.RVtf
+import           BriskRows.Internal.Sem
 
 -----
 
@@ -34,29 +35,29 @@ name# _ = proxy#
 -----
 
 -- | Alias of 'ins#'
-insP :: KnownLT nm rho => proxy nm -> a -> Rcd rho -> Rcd (rho :& nm := a)
+insP :: KnownLT nm rho => proxy nm -> Sem f nm a -> Rcd f rho -> Rcd f (rho :& nm := a)
 insP = \nm -> ins# (name# nm)
 
 -- | Alias of 'del#'
-delP :: KnownLT nm rho => name nm -> Rcd (rho :& nm := a) -> Rcd rho
+delP :: KnownLT nm rho => name nm -> Rcd f (rho :& nm := a) -> Rcd f rho
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: KnownLT nm rho => proxy nm -> Rcd rho -> Select nm rho
+prjP :: KnownLT nm rho => proxy nm -> Rcd f rho -> Sem f nm (Select nm rho)
 prjP = \nm -> prj# (name# nm)
 
 -----
 
 -- | Alias of 'cas#'
-casP :: KnownLT nm rho => proxy nm -> (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
+casP :: KnownLT nm rho => proxy nm -> (Sem f nm a -> ans) -> (Vrt f rho -> ans) -> (Vrt f (rho :& nm := a) -> ans)
 casP = \nm -> cas# (name# nm)
 
 -- | Alias of 'wkn#'
-wknP :: KnownLT nm rho => name nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
+wknP :: KnownLT nm rho => name nm -> (Vrt f (rho :& nm := a) -> ans) -> (Vrt f rho -> ans)
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: KnownLT nm rho => proxy nm -> Select nm rho -> Vrt rho
+injP :: KnownLT nm rho => proxy nm -> Sem f nm (Select nm rho) -> Vrt f rho
 injP = \nm -> inj# (name# nm)
 
 -----

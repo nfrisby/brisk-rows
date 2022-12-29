@@ -12,7 +12,7 @@
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
-{-# OPTIONS_HADDOCK -not-home #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 module BriskRows.Internal (
     -- * Row types
@@ -20,7 +20,7 @@ module BriskRows.Internal (
     CmpName,
     ROW (Row#),
     Emp,
-    Extend, (:&),
+    Ext, (:&),
     Select,
     -- * Row type constraints
     KnownLT (knownLT#),
@@ -29,6 +29,9 @@ module BriskRows.Internal (
     Absent,
     -- * Util
     Lexico,
+    Err,
+    NoErr,
+    TypeErr,
     ) where
 
 import           Data.Kind (Type)
@@ -43,11 +46,19 @@ import           GHC.TypeLits (Nat, Symbol)
 
 -----
 
--- | A distinguished data kind for the 'Assert'-like argument
-data Err = NoErr
+-- | A distinguished data kind for the 'GHC.TypeError.Assert'-like argument
+--
+-- TODO link to Fail-safe Arguments post on Tweag blog
+data Err
+
+type family NoErr :: Err where {}
 
 -- This indirection is enough to disarm the errors while GHC compiles this module
-type family TypeErr (err :: ErrorMessage) :: Err where TypeErr err = TypeError err
+type family TypeErr (err :: ErrorMessage) :: Err where -- TypeErr err = TypeError err
+
+-----
+----- specific error messages for code in this module
+-----
 
 type Incomparable (nm :: k) (x :: k) =
     Text "These names are incomparable! " :$$: (Text "        " :<>: ShowType nm) :$$: (Text "    and " :<>: ShowType x)
@@ -64,6 +75,9 @@ type AbstractCOL (col :: COL k v) = Text "This column is not concrete! " :<>: Sh
 
 infix 7 :=
 
+-- | A column in a row type
+--
+-- See 'ROW'.
 data COL k v = k := v
 
 -- | The order of keys to use for 'ROW' types
@@ -188,35 +202,6 @@ type instance CmpName @(k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k
 type instance CmpName @(k0, k1, k2, k3, k4, k5, k6, k7, k8, k9, k10, k11, k12, k13, k14, k15) '(l0, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15) '(r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4 `Lexico` CmpName l5 r5 `Lexico` CmpName l6 r6 `Lexico` CmpName l7 r7 `Lexico` CmpName l8 r8 `Lexico` CmpName l9 r9 `Lexico` CmpName l10 r10 `Lexico` CmpName l11 r11 `Lexico` CmpName l12 r12 `Lexico` CmpName l13 r13 `Lexico` CmpName l14 r14 `Lexico` CmpName l15 r15
 
 -----
-{-
--- | How many columns in the row are less than @nm@ according to 'CmpName'
-type family CountLT
-    ( nm  :: k     )
-    ( rho :: ROW k )
-          :: N
-  where
-    CountLT nm (Row# '[]             ) = Z
-    CountLT nm (Row# (x := b ': cols)) = CountLT_Ordering (Incomparable nm x) (CmpName nm x) nm cols
-
-type family CountLT_Ordering
-    (  err :: Err      )
-    (    o :: Ordering )
-    (   nm :: k        )
-    ( cols :: [COL k]  )
-           :: N
-  where
-    CountLT_Ordering err LT nm cols =    CountLT nm (Row# cols)
-    CountLT_Ordering err EQ nm cols =    CountLT nm (Row# cols)
-    CountLT_Ordering err GT nm cols = S (CountLT nm (Row# cols))
-
-data N = Z | S N
-
--- | The demoted natural
-class KnownN (n :: N) where knownN# :: Proxy# n -> I#
-
-instance             KnownN  Z    where knownN# = \_n -> 0#
-instance KnownN n => KnownN (S n) where knownN# = \_n -> 1# +# knownN# (proxy# :: Proxy# n)
--}
 
 -- | Key data enabling methods on records, variants, etc
 --
@@ -390,9 +375,11 @@ type family Select_Ordering
 -----
 
 -- | Extend the row by inserting the given column
-type Extend nm a rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
+--
+-- See ':&'.
+type Ext nm a rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 infixl 5 :&
 
--- | Operator alias of 'Extend'
+-- | Operator alias of 'Ext'
 type row :& col = Extend_Col (TypeErr (AbstractCOL col)) col row

@@ -4,7 +4,7 @@ module BriskRows (
     CmpName,
     ROW,
     Emp,
-    Extend, (:&),
+    Ext, (:&),
     -- * Row type constraints
     Absent,
     KnownLT,

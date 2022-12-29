@@ -1,134 +1,95 @@
-{-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE TypeOperators #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK -not-home #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 module BriskRows.Internal.RVf (
     -- * Records
-    Rcd (Rcd#),
+    Rcd (Rcd),
     del#,
     emp,
     ins#,
     prj#,
     -- * Variants
-    Vrt (Vrt#),
+    Vrt (Vrt),
     abd,
     cas#,
     inj#,
     wkn#,
     -- * Both
+    asFldOf,
+    idFldOf#,
     lacking#,
     ) where
 
 import           Data.Kind (Type)
-import qualified Data.Sequence as Sq
-import           GHC.Exts (Any, Proxy#, proxy#)
-import           GHC.Prim (Int#, (+#), (-#))
-import           GHC.Types (Int (I#))
-import           Unsafe.Coerce (unsafeCoerce)
+import           GHC.Exts (Proxy#)
 
 import           BriskRows.Internal
-
------
-
-row# :: rOW (rho :: ROW k v) -> Proxy# rho
-row# _ = proxy#
-
-vrtRow# :: (t f (rho :: ROW k v) -> ans) -> Proxy# rho
-vrtRow# _ = proxy#
-
-knownLT :: KnownLT nm rho => Proxy# nm -> Proxy# rho -> Int
-knownLT = \nm rho -> I# (knownLT# nm rho)
+import qualified BriskRows.Internal.RVtf as RVtf
+import qualified BriskRows.Internal.Sem as Sem
 
 -----
 
 -- | A record
-newtype Rcd (f :: k -> v -> Type) (rho :: ROW k v) =
-    -- | INVARIANT Same order as the row
-    Rcd# (Sq.Seq Any)
+newtype Rcd (fld :: k -> v -> Type) (rho :: ROW k v) =
+    Rcd (RVtf.Rcd (Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho)
 
-emp :: Rcd f (Emp :: ROW k v)
-emp = Rcd# Sq.empty
+emp :: Rcd fld (Emp :: ROW k v)
+emp = Rcd RVtf.emp
 
 -- | Extend the record's row by inserting another field
-ins# :: KnownLT nm rho => Proxy# nm -> f nm a -> Rcd f rho -> Rcd f (rho :& nm := a)
-ins# = \nm a rcd ->
-    let rho     = row# rcd
-        Rcd# sq = rcd
-    in
-    Rcd# $ Sq.insertAt (knownLT nm rho) (unsafeCoerce a) sq
+ins# :: KnownLT nm rho => Proxy# nm -> fld nm a -> Rcd fld rho -> Rcd fld (rho :& nm := a)
+ins# = \nm a (Rcd rcd) -> Rcd $ RVtf.ins# nm a rcd
 
 -- | Restrict the record's row by deleting a field
-del# :: KnownLT nm rho => Proxy# nm -> Rcd f (rho :& nm := a) -> Rcd f rho
-del# = \nm rcd ->
-    let Rcd# sq = rcd
-        rcd'    = Rcd# $ Sq.deleteAt (knownLT nm (row# rcd')) sq
-    in
-    rcd'
+del# :: KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> Rcd fld rho
+del# = \nm (Rcd rcd) -> Rcd $ RVtf.del# nm rcd
 
 -- | Project a value out of the record
 --
 -- See 'Select'.
-prj# :: KnownLT nm rho => Proxy# nm -> Rcd f rho -> f nm (Select nm rho)
-prj# = \nm rcd ->
-    let rho     = row# rcd
-        Rcd# sq = rcd
-    in
-    unsafeCoerce $ Sq.index sq (knownLT nm rho)
+prj# :: KnownLT nm rho => Proxy# nm -> Rcd fld rho -> fld nm (Select nm rho)
+prj# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
 
 -----
 
 -- | A variant
-data Vrt (f :: k -> v -> Type) (rho :: ROW k v) =
-    -- | INVARIANT The integer is the value's index in the row
-    --
-    -- For the most-recently added column of a given name, this tag is
-    -- equivalent to 'knownLT#'. See 'Row#'.
-    Vrt# !Any Int#
+data Vrt (fld :: k -> v -> Type) (rho :: ROW k v) =
+    Vrt (RVtf.Vrt (Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho)
 
 -- | An absurd value, since an empty variant is an empty type
-abd :: Vrt f Emp -> ans
+abd :: Vrt fld Emp -> ans
 abd = error "Vrt.abd"
 
 -- | Extend a variant continuation's row by adding another case
-cas# :: KnownLT nm rho => Proxy# nm -> (f nm a -> ans) -> (Vrt f rho -> ans) -> (Vrt f (rho :& nm := a) -> ans)
-cas# = \nm f g vrt ->
-    let rho          = vrtRow# g
-        !(Vrt# a i#) = vrt
-    in
-    case compare (I# i#) (knownLT nm rho) of
-      LT -> g $ Vrt# a i#        
-      EQ -> unsafeCoerce f a   -- the nm column is the first thing in rho :& nm that's not less than nm
-      GT -> g $ Vrt# a (i# -# 1#)
+cas# :: KnownLT nm rho => Proxy# nm -> (fld nm a -> ans) -> (Vrt fld rho -> ans) -> (Vrt fld (rho :& nm := a) -> ans)
+cas# = \nm fld g (Vrt vrt) -> RVtf.cas# nm fld (g . Vrt) vrt
 
 -- | Restrict a variant continuation's row by weakening it no longer handle a specific case
-wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt f (rho :& nm := a) -> ans) -> (Vrt f rho -> ans)
-wkn# = \nm f vrt ->
-    let rho          = row# vrt
-        !(Vrt# a i#) = vrt
-    in
-    case compare (I# i#) (knownLT nm rho) of
-      LT -> f $ Vrt# a  i#
-      EQ -> f $ Vrt# a (i# +# 1#)   -- the new nm column is the first thing in rho :& nm that's not less than nm
-      GT -> f $ Vrt# a (i# +# 1#)
+wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt fld rho -> ans)
+wkn# = \nm fld (Vrt vrt) -> RVtf.wkn# nm (fld . Vrt) vrt
 
 -- | Inject a value into the variant
 --
 -- See 'Select'.
-inj# :: KnownLT nm rho => Proxy# nm -> f nm (Select nm rho) -> Vrt f rho
-inj# = \nm a ->
-    let vrt = Vrt# (unsafeCoerce a) (knownLT# nm (row# vrt))
-    in
-    vrt
+inj# :: KnownLT nm rho => Proxy# nm -> fld nm (Select nm rho) -> Vrt fld rho
+inj# = \nm a -> Vrt $ RVtf.inj# nm a
 
 -----
 
+infix 2 `asFldOf`
+
+asFldOf :: t (fld :: k -> v -> Type) (rho1 :: ROW k v) -> u fld rho2 -> t fld rho1
+asFldOf = \x _y -> x
+
+idFldOf# :: Proxy# fld -> t (fld :: k -> v -> Type) (rho :: ROW k v) -> t fld rho
+idFldOf# = \_f x -> x
+
 lacking# :: Absent nm rho => Proxy# nm -> t rho -> t rho
-lacking# = \_nm -> id
+lacking# = RVtf.lacking#

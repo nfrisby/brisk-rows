@@ -6,7 +6,7 @@
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK -not-home #-}
+{-# OPTIONS_HADDOCK not-home #-}
 
 module BriskRows.Internal.RV (
     -- * Records

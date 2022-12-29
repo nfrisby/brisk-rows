@@ -5,9 +5,9 @@
 
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK not-home #-}
+{-# OPTIONS_HADDOCK -not-home #-}
 
-module BriskRows.Internal.RVf.Operators (
+module BriskRows.Internal.RVtf.Operators (
     -- * Records
     (.*),
     (./),
@@ -21,15 +21,16 @@ module BriskRows.Internal.RVf.Operators (
 
 import           BriskRows.Internal
 import           BriskRows.Internal.RV.Operators (Name (Name), col)
-import           BriskRows.Internal.RVf
-import           BriskRows.Internal.RVf.Proxy
+import           BriskRows.Internal.RVtf
+import           BriskRows.Internal.RVtf.Proxy
+import           BriskRows.Internal.Sem
 
 -----
 
 infixl 5 .*
 
 -- | Alias of 'ins#'
-(.*) :: KnownLT nm rho => Rcd f rho -> COL (Name nm) (f nm a) -> Rcd f (rho :& nm := a)
+(.*) :: KnownLT nm rho => Rcd f rho -> COL (Name nm) (Sem f nm a) -> Rcd f (rho :& nm := a)
 rcd .* nm := a = insP nm a rcd
 
 infixl 5 ./
@@ -43,7 +44,7 @@ rcd ./ nm = delP nm rcd
 infixl 5 .+
 
 -- | Alias of 'cas#'
-(.+) :: KnownLT nm rho => (Vrt f rho -> ans) -> COL (Name nm) (f nm a -> ans) -> (Vrt f (rho :& nm := a) -> ans)
+(.+) :: KnownLT nm rho => (Vrt f rho -> ans) -> COL (Name nm) (Sem f nm a -> ans) -> (Vrt f (rho :& nm := a) -> ans)
 g .+ nm := f = casP nm f g
 
 infixl 5 .-

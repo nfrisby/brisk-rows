@@ -8,9 +8,9 @@
 
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
 
-{-# OPTIONS_HADDOCK not-home #-}
+{-# OPTIONS_HADDOCK -not-home #-}
 
-module BriskRows.Internal.RVf.Ambiguous (
+module BriskRows.Internal.RVtf.Ambiguous (
     -- * Records
     del,
     ins,
@@ -26,12 +26,13 @@ module BriskRows.Internal.RVf.Ambiguous (
 import           GHC.Exts (proxy#)
 
 import           BriskRows.Internal
-import           BriskRows.Internal.RVf
+import           BriskRows.Internal.RVtf
+import           BriskRows.Internal.Sem
 
 -----
 
 -- | Alias of 'ins#'
-ins :: forall nm {a} {rho} {f}. KnownLT nm rho => f nm a -> Rcd f rho -> Rcd f (rho :& nm := a)
+ins :: forall nm {a} {rho} {f}. KnownLT nm rho => Sem f nm a -> Rcd f rho -> Rcd f (rho :& nm := a)
 ins = ins# (proxy# @nm)
 
 -- | Alias of 'del#'
@@ -39,13 +40,13 @@ del :: forall nm {a} {rho} {f}. KnownLT nm rho => Rcd f (rho :& nm := a) -> Rcd 
 del = del# (proxy# @nm)
 
 -- | Alias of 'prj#'
-prj :: forall nm {rho} {f}. KnownLT nm rho => Rcd f rho -> f nm (Select nm rho)
+prj :: forall nm {rho} {f}. KnownLT nm rho => Rcd f rho -> Sem f nm (Select nm rho)
 prj = prj# (proxy# @nm)
 
 -----
 
 -- | Alias of 'cas#'
-cas :: forall nm {a} {rho} {f} {ans}. KnownLT nm rho => (f nm a -> ans) -> (Vrt f rho -> ans) -> (Vrt f (rho :& nm := a) -> ans)
+cas :: forall nm {a} {rho} {f} {ans}. KnownLT nm rho => (Sem f nm a -> ans) -> (Vrt f rho -> ans) -> (Vrt f (rho :& nm := a) -> ans)
 cas = cas# (proxy# @nm)
 
 -- | Alias of 'wkn#'
@@ -53,7 +54,7 @@ wkn :: forall nm {a} {rho} {f} {ans}. KnownLT nm rho => (Vrt f (rho :& nm := a) 
 wkn = wkn# (proxy# @nm)
 
 -- | Alias of 'inj#'
-inj :: forall nm {rho} {f}. KnownLT nm rho => f nm (Select nm rho) -> Vrt f rho
+inj :: forall nm {rho} {f}. KnownLT nm rho => Sem f nm (Select nm rho) -> Vrt f rho
 inj = inj# (proxy# @nm)
 
 -----

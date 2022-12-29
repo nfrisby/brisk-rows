@@ -6,7 +6,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
--- | This typechecker plugin that rearranges 'BriskRow.ROW' equalities
+-- | This typechecker plugin rearranges equalities at kind 'BriskRow.ROW'
 module BriskRows.Plugin (plugin) where
 
 import           Control.Applicative ((<|>))
@@ -33,6 +33,7 @@ import qualified GHC.Tc.Utils.TcType as TcType
 import qualified GHC.Core.TyCon as TyCon
 import           GHC.Types.Unique.FM (unitUFM)
 
+-- | The @brisk-rows@ typechecker plugin
 plugin :: GhcPlugins.Plugin
 plugin = GhcPlugins.defaultPlugin
   { GhcPlugins.pluginRecompile = \_args -> pure GhcPlugins.NoForceRecompile
@@ -135,6 +136,8 @@ newEnv = do
   
     envSelect <- luTC "Select"
 
+    -- We can skip Extend, since it's a type synonym. (TODO and so eqType handles that, right?)
+    -- We can skip Extend_Row# since this function is only ever used once we've confirmed it's not an extension.
     envStops <- mapM luTC $ words "Cons Extend_Col Extend_Ordering Restrict_Ordering Restrict"
 
     pure Env{..}
@@ -160,6 +163,7 @@ mkSelect Env{envSelect} k v nm rho = TcType.mkTyConApp envSelect [k, v, nm, rho]
 
 -----
 
+-- | See 'BriskRows.Internal.CmpName' for the explanation of we implement its reflexivity in the plugin
 rewriteCmpName :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
 rewriteCmpName env _rwenv _gs args = case args of
   [_k, l, r]
@@ -197,6 +201,7 @@ newConstraint env olds (NewCtRecipe old news) =
 
     each :: NewEquality -> TcPluginM (Maybe Ct)
     each new@(NewEquality l r)
+        -- don't emit the equality if it already exists
       | Just ct <- isOld new = do
         doTrace env $ text "SKIPPING" <+> ppr (new, ct)
         pure Nothing
@@ -253,19 +258,26 @@ improve env ct = case ct of
     go lhs rhs = case getExtend env lhs of   -- the LHS will never be the Row#, will it?
       Just ext
         | isRow env rhs
-        -> goInv env ext rhs []
+        -> goInverted env ext rhs []
 
         | Just rext <- getExtend env rhs
-        -> goInj ext rext
+        -> goOuterInjectivity ext rext
 
       _ -> Nothing
 
-goInv :: Env -> Extension -> TcType -> [NewEquality] -> Maybe [NewEquality]
-goInv env ext rhs acc =
+-- | Invert extensions to restrictions
+--
+-- @root :& nmN := aN :& ... :& nm2 := a2 :& nm1 := a1@ equals @Row# [k1 := v1, k2 := v2, ..., kN := vN]@
+-- only if @a1 ~ Select nm1 (Row# [k1 ... vN])@, @a2 ~ Select nm2 (Row# [k1 ... vN])@, all the way to @aN ~ Select nmN (Row# [k1 ... vN])@
+-- and also @root ~ Restrict nmN (... (Restrict nm2 (Restrict nm1 (Row# [k1 ... vN]))))@.
+goInverted :: Env -> Extension -> TcType -> [NewEquality] -> Maybe [NewEquality]
+goInverted env ext rhs acc =
     case getExtend env rho of
-      Just ext' -> goInv env ext' rhs' acc'
+      Just ext' -> goInverted env ext' rhs' acc'
       Nothing   ->
-        if isStop env rho then Nothing else Just (NewEquality rho rhs' : acc')
+        -- emit no equalities if the root is one of our internal type families
+        if isStop env rho then Nothing else
+        Just (NewEquality rho rhs' : acc')
   where
     Extend k v nm a rho = ext
 
@@ -273,14 +285,19 @@ goInv env ext rhs acc =
 
     rhs' = mkRestrict env k v nm rhs
 
--- This simple treatment of just one layer suffices for the general definitions
--- in "BriskRows.Internal.RV" etc.
-goInj :: Extension -> Extension -> Maybe [NewEquality]
-goInj lext rext
+-- | This simple treatment of just one layer suffices for the general
+-- definitions in "BriskRows.Internal.RV" etc.
+goOuterInjectivity :: Extension -> Extension -> Maybe [NewEquality]
+goOuterInjectivity lext rext
+    -- kinds must match
   | not $ lk `eqType` rk && lv `eqType` rv = Nothing
 
+    -- if the outermost names are equal, require the images and (recursively) extended rows are too
   | lnm `eqType` rnm   = Just [NewEquality la ra, NewEquality lrho rrho]
+
+    -- if the extended rows are equal, require the outermost names and images are too
   | lrho `eqType` rrho = Just [NewEquality la ra, NewEquality lnm  rnm ]
+
   | otherwise          = Nothing
   where
     Extend lk lv lnm la lrho = lext
