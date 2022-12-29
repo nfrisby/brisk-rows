@@ -1,8 +1,14 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MagicHash #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
@@ -23,20 +29,27 @@ module BriskRows.Internal.RV (
     inj#,
     wkn#,
     -- * Both
+    AllMonoid,
+    AllSemigroup,
     lacking#,
+    pur,
+    Splat (splat#),
+    SplatF,
+    splat,
     ) where
 
 import           Data.Kind (Type)
-import           GHC.Exts (Proxy#)
+import           GHC.Exts (Proxy#, proxy#)
 
-import           BriskRows.Fields (I (I), unI)
+import qualified BriskRows.Fields as Fields
 import           BriskRows.Internal
 import qualified BriskRows.Internal.RVf as RVf
+import qualified BriskRows.Internal.RVtf as RVtf
 
 -----
 
 -- | A record
-newtype Rcd (rho :: ROW k Type) = Rcd (RVf.Rcd I rho)
+newtype Rcd (rho :: ROW k Type) = Rcd (RVf.Rcd Fields.I rho)
 
 -- | The empty record
 emp :: forall {k}. Rcd (Emp :: ROW k Type)
@@ -44,7 +57,7 @@ emp = Rcd $ RVf.emp
 
 -- | Extend the record's row by inserting another field
 ins# :: forall {nm} {rho} {a}. KnownLT nm rho => Proxy# nm -> a -> Rcd rho -> Rcd (rho :& nm := a)
-ins# = \nm a (Rcd rcd) -> Rcd $ RVf.ins# nm (I a) rcd
+ins# = \nm a (Rcd rcd) -> Rcd $ RVf.ins# nm (Fields.I a) rcd
 
 -- | Restrict the record's row by deleting a field
 del# :: forall {nm} {rho} {a}. KnownLT nm rho => Proxy# nm -> Rcd (rho :& nm := a) -> Rcd rho
@@ -54,12 +67,12 @@ del# = \nm (Rcd rcd) -> Rcd $ RVf.del# nm rcd
 --
 -- See 'Select'.
 prj# :: forall {nm} {rho}. KnownLT nm rho => Proxy# nm -> Rcd rho -> Select nm rho
-prj# = \nm (Rcd rcd) -> unI $ RVf.prj# nm rcd
+prj# = \nm (Rcd rcd) -> Fields.unI $ RVf.prj# nm rcd
 
 -----
 
 -- | A variant
-newtype Vrt (rho :: ROW k Type) = Vrt (RVf.Vrt I rho)
+newtype Vrt (rho :: ROW k Type) = Vrt (RVf.Vrt Fields.I rho)
 
 -- | An absurd value, since an empty variant is an empty type
 abd :: forall {ans}. Vrt Emp -> ans
@@ -67,7 +80,7 @@ abd = error "Vrt.abd"
 
 -- | Extend a variant continuation's row by adding another case
 cas# :: forall {nm} {rho} {a} {ans}. KnownLT nm rho => Proxy# nm -> (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
-cas# = \nm f g (Vrt vrt) -> RVf.cas# nm (f . unI) (g . Vrt) vrt
+cas# = \nm f g (Vrt vrt) -> RVf.cas# nm (f . Fields.unI) (g . Vrt) vrt
 
 -- | Restrict a variant continuation's row by weakening it no longer handle a specific case
 wkn# :: forall {nm} {rho} {a} {ans}. KnownLT nm rho => Proxy# nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
@@ -81,10 +94,67 @@ wkn# = \nm f (Vrt vrt) -> RVf.wkn# nm (f . Vrt) vrt
 --
 -- See 'Select'.
 inj# :: forall {nm} {rho}. KnownLT nm rho => Proxy# nm -> Select nm rho -> Vrt rho
-inj# = \nm a -> Vrt $ RVf.inj# nm (I a)
+inj# = \nm a -> Vrt $ RVf.inj# nm (Fields.I a)
 
 -----
 
 -- | Require the name is 'Absent' from the row
 lacking# :: forall {nm} {rho} {rv}. Absent nm rho => Proxy# nm -> rv rho -> rv rho
 lacking# = \_nm -> id
+
+-----
+
+class    Monoid v => ImgIsMonoid k v
+instance Monoid v => ImgIsMonoid k v
+
+-- | Every image in the row is an instance of 'Monoid'
+class    RVf.AllCols ImgIsMonoid rho         => AllMonoid (rho :: ROW k Type)
+instance RVf.AllCols ImgIsMonoid (Row# cols) => AllMonoid (Row# cols)
+
+-- | Use 'mempty' for each field
+pur :: forall {rho}. AllMonoid rho => Rcd rho
+pur = Rcd $
+    RVf.pur# proxy# (Fields.A $ \Fields.D -> Fields.I mempty)
+  `RVf.splat`
+    RVf.dicts# (proxy# @ImgIsMonoid)
+
+infixl 4 `splat`
+
+class    Semigroup v => ImgIsSemigroup k v
+instance Semigroup v => ImgIsSemigroup k v
+
+-- | Every image in the row is an instance of 'Semigroup'
+class    RVf.AllCols ImgIsSemigroup rho         => AllSemigroup (rho :: ROW k Type)
+instance RVf.AllCols ImgIsSemigroup (Row# cols) => AllSemigroup (Row# cols)
+
+-- | Combine one 'Rcd' or 'Vrt' with another, via '<>'
+splat ::
+  forall {l} {r} {rho}.
+    (AllSemigroup rho, Splat (TypeErr (RVtf.NoSplat l r)) l r)
+ => l rho
+ -> r rho
+ -> SplatF l r rho
+splat = splat# (proxy# @(TypeErr (RVtf.NoSplat l r)))
+
+-- | The result shape of 'splat'
+--
+-- It's 'Rcd' if both are 'Rcd's, it's @'Maybe' 'Vrt'@ if both are 'Vrt's, and it's
+-- 'Vrt' if it's one of each.
+type family SplatF (l :: ROW k Type -> Type) (r :: ROW k Type -> Type) (rho :: ROW k Type) :: Type
+  where
+    SplatF Rcd Rcd rho =        Rcd rho
+    SplatF Rcd Vrt rho =        Vrt rho
+    SplatF Vrt Rcd rho =        Vrt rho
+    SplatF Vrt Vrt rho = Maybe (Vrt rho)
+
+class Splat (err :: Err) (l :: ROW k Type -> Type) (r :: ROW k Type -> Type)
+  where
+    splat# :: RVf.AllCols ImgIsSemigroup rho => Proxy# err -> l rho -> r rho -> SplatF l r rho
+
+combo :: (Fields.D ImgIsSemigroup Fields.:->: Fields.I Fields.:->: Fields.I Fields.:->: Fields.I) k v
+combo = Fields.A $ \Fields.D -> Fields.A $ \(Fields.I l') -> Fields.A $ \(Fields.I r') -> Fields.I $ l' <> r'
+
+instance Splat err Rcd Rcd where splat# = \_err (Rcd l) (Rcd r) ->      Rcd $ RVf.pur# proxy# combo `RVf.splat` RVf.dicts# (proxy# @ImgIsSemigroup) `RVf.splat` l `RVf.splat` r
+instance Splat err Rcd Vrt where splat# = \_err (Rcd l) (Vrt r) ->      Vrt $ RVf.pur# proxy# combo `RVf.splat` RVf.dicts# (proxy# @ImgIsSemigroup) `RVf.splat` l `RVf.splat` r
+instance Splat err Vrt Rcd where splat# = \_err (Vrt l) (Rcd r) ->      Vrt $ RVf.pur# proxy# combo `RVf.splat` RVf.dicts# (proxy# @ImgIsSemigroup) `RVf.splat` l `RVf.splat` r
+instance Splat err Vrt Vrt where splat# = \_err (Vrt l) (Vrt r) -> fmap Vrt $ RVf.pur# proxy# combo `RVf.splat` RVf.dicts# (proxy# @ImgIsSemigroup) `RVf.splat` l `RVf.splat` r

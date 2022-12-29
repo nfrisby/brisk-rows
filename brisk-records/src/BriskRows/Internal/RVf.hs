@@ -4,10 +4,12 @@
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 {-# OPTIONS_GHC -fplugin=BriskRows.Plugin #-}
@@ -16,11 +18,14 @@
 
 module BriskRows.Internal.RVf (
     -- * Records
+    AllCols,
+    dicts#,
     Rcd (Rcd),
     del#,
     emp,
     ins#,
     prj#,
+    pur#,
     -- * Variants
     Vrt (Vrt),
     abd,
@@ -28,13 +33,14 @@ module BriskRows.Internal.RVf (
     inj#,
     wkn#,
     -- * Both
+    Splat (splat#),
     asFldOf,
     idFldOf#,
     lacking#,
     splat,
     ) where
 
-import           Data.Kind (Type)
+import           Data.Kind (Constraint, Type)
 import           GHC.Exts (Proxy#, proxy#)
 
 import           BriskRows.Fields
@@ -104,6 +110,13 @@ lacking# = RVtf.lacking#
 
 -----
 
+pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. fld nm a) -> Rcd fld rho
+pur# = \_fld f -> Rcd $ RVtf.pur# (proxy# @(Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img)) f
+
+-----
+
+infixl 4 `splat`
+
 splat ::
   forall {l} {r} {fld1} {fld2} {rho}.
     Splat (TypeErr (RVtf.NoSplat l r)) l r
@@ -123,17 +136,18 @@ class Splat (err :: Err) (l :: (k -> v -> Type) -> ROW k v -> Type) (r :: (k -> 
   where
     splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
 
-type Lift fld = Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img
+instance Splat err Rcd Rcd where splat# = \err (Rcd l) (Rcd r) -> Rcd $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
+instance Splat err Rcd Vrt where splat# = \err (Rcd l) (Vrt r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
+instance Splat err Vrt Rcd where splat# = \err (Vrt l) (Rcd r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
+instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> Vrt <$> RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
 
-unwrap ::
-     Sem.Sem (Lift (fld1 :->: fld2)) k v
-  -> Sem.Sem
-       (Lift fld1 Sem.:->: Lift fld2)
-       k
-       v
-unwrap = unA
+-----
 
-instance Splat err Rcd Rcd where splat# = \err (Rcd l) (Rcd r) -> Rcd $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
-instance Splat err Rcd Vrt where splat# = \err (Rcd l) (Vrt r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
-instance Splat err Vrt Rcd where splat# = \err (Vrt l) (Rcd r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
-instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> Vrt <$> RVtf.splat# err (RVtf.natro# proxy# proxy# unwrap l) r
+class    RVtf.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho         => AllCols (c :: k -> v -> Constraint) (rho :: ROW k v)
+instance RVtf.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) (Row# cols) => AllCols c                           (Row# cols)
+
+dicts# :: forall {c} {rho}. AllCols c rho => Proxy# c -> Rcd (D c) rho
+dicts# _prx =
+    Rcd
+  $ RVtf.natro# proxy# proxy# (\Sem.Dict -> D)
+  $ RVtf.dicts# (proxy# @(Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img))

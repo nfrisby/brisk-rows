@@ -41,9 +41,13 @@
 -- * @rcd '.*' 'col' \@Foo True@, see @-XTypeApplications@
 module BriskRows.RV (
     module BriskRows,
+
     -- * Records
     Rcd,
     emp,
+    -- ** 'Monoid'
+    AllMonoid,
+    pur,
     -- ** Via 'Proxy#'
     del#, ins#, prj#,
     -- ** Via @-XTypeApplications@
@@ -52,6 +56,7 @@ module BriskRows.RV (
     delP, insP, prjP,
     -- ** Via 'COL' operators
     (./), (.*),
+
     -- * Variants
     Vrt,
     abd,
@@ -63,7 +68,13 @@ module BriskRows.RV (
     casP, injP, wknP,
     -- ** Via 'COL' operators
     (.-), (.+),
+
     -- * Both
+    -- ** 'Semigroup'
+    AllSemigroup,
+    Splat,
+    SplatF,
+    splat,
     -- ** Via 'Proxy#'
     lacking#,
     -- ** Via @-XTypeApplications@
