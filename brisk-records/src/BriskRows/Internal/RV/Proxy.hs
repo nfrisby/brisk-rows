@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PolyKinds #-}
@@ -28,39 +29,39 @@ import           BriskRows.Internal.RV
 
 -----
 
-name# :: name (nm :: k) -> Proxy# nm
+name# :: forall {k} {proxy} {nm}. proxy (nm :: k) -> Proxy# nm
 name# _ = proxy#
 
 -----
 
 -- | Alias of 'ins#'
-insP :: KnownLT nm rho => proxy nm -> a -> Rcd rho -> Rcd (rho :& nm := a)
+insP :: forall {nm} {rho} {proxy} {a}. KnownLT nm rho => proxy nm -> a -> Rcd rho -> Rcd (rho :& nm := a)
 insP = \nm -> ins# (name# nm)
 
 -- | Alias of 'del#'
-delP :: KnownLT nm rho => name nm -> Rcd (rho :& nm := a) -> Rcd rho
+delP :: forall {nm} {rho} {proxy} {a}. KnownLT nm rho => proxy nm -> Rcd (rho :& nm := a) -> Rcd rho
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: KnownLT nm rho => proxy nm -> Rcd rho -> Select nm rho
+prjP :: forall {nm} {rho} {proxy}. KnownLT nm rho => proxy nm -> Rcd rho -> Select nm rho
 prjP = \nm -> prj# (name# nm)
 
 -----
 
 -- | Alias of 'cas#'
-casP :: KnownLT nm rho => proxy nm -> (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
+casP :: forall {nm} {rho} {proxy} {a} {ans}. KnownLT nm rho => proxy nm -> (a -> ans) -> (Vrt rho -> ans) -> (Vrt (rho :& nm := a) -> ans)
 casP = \nm -> cas# (name# nm)
 
 -- | Alias of 'wkn#'
-wknP :: KnownLT nm rho => name nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
+wknP :: forall {nm} {rho} {proxy} {a} {ans}. KnownLT nm rho => proxy nm -> (Vrt (rho :& nm := a) -> ans) -> (Vrt rho -> ans)
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: KnownLT nm rho => proxy nm -> Select nm rho -> Vrt rho
+injP :: forall {nm} {rho} {proxy}. KnownLT nm rho => proxy nm -> Select nm rho -> Vrt rho
 injP = \nm -> inj# (name# nm)
 
 -----
 
 -- | Alias of 'lacking#'
-lackingP :: Absent nm rho => name nm -> t rho -> t rho
+lackingP :: forall {rv} {nm} {rho} {proxy}. Absent nm rho => proxy nm -> rv rho -> rv rho
 lackingP = \nm -> lacking# (name# nm)
