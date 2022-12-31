@@ -1,6 +1,6 @@
 name:                brisk-records
 version:             0.1.0.0
-synopsis:            Records and variants for brisk-rows
+synopsis:            Records and variants on top of brisk-rows
 -- description:
 license:             BSD-2-Clause
 copyright:           2022 Nicolas Frisby
@@ -15,6 +15,7 @@ library
 
   exposed-modules:
                        BriskRows.Fields
+                       BriskRows.Idx
                        BriskRows.RV
                        BriskRows.RVf
                        BriskRows.RVtf

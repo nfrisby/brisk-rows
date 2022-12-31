@@ -1,8 +1,8 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ExplicitForAll #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -26,15 +26,20 @@ module BriskRows.Internal.RVtf (
     del#,
     dicts#,
     emp,
+    idxs,
     ins#,
     natro#,
     prj#,
+    prjAt,
     pur#,
     -- * Variants
-    Vrt (Vrt#),
+    Vrt (Vrt),
     abd,
     cas#,
+    idxFromVrt,
     inj#,
+    injAt,
+    vrtFromIdx,
     wkn#,
     -- * Both
     NoSplat,
@@ -50,21 +55,18 @@ import qualified Data.Foldable as Foldable
 import           Data.Kind (Constraint, Type)
 import qualified Data.Sequence as Sq
 import           GHC.Exts (Any, Proxy#, proxy#)
-import           GHC.Prim (Int#, (+#), (-#))
 import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType))
 import           GHC.Types (Int (I#))
 import           Unsafe.Coerce (unsafeCoerce)
 
+import qualified BriskRows.Idx as Idx
 import           BriskRows.Internal
 import           BriskRows.Internal.Sem
 
 -----
 
-row# :: rOW (rho :: ROW k v) -> Proxy# rho
+row# :: rv (rho :: ROW k v) -> Proxy# rho
 row# _ = proxy#
-
-vrtRow# :: (t fld (rho :: ROW k v) -> ans) -> Proxy# rho
-vrtRow# _ = proxy#
 
 knownLT :: KnownLT nm rho => Proxy# nm -> Proxy# rho -> Int
 knownLT = \nm rho -> I# (knownLT# nm rho)
@@ -95,15 +97,14 @@ del# = \nm rcd ->
     in
     rcd'
 
+{-
+prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
+prj2# = \nm rcd -> prjAt (Idx.idx2# nm (row# rcd)) rcd
+-}
+
 -- | Project a value out of the record
---
--- See 'Select'.
-prj# :: KnownLT nm rho => Proxy# nm -> Rcd fld rho -> Sem fld nm (Select nm rho)
-prj# = \nm rcd ->
-    let rho     = row# rcd
-        Rcd# sq = rcd
-    in
-    unsafeCoerce $ Sq.index sq (knownLT nm rho)
+prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
+prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
 
 -----
 
@@ -124,47 +125,87 @@ pur# = \_fld f -> Rcd# $ Sq.replicate (I# (knownLen# (proxy# @rho))) (f @Any @An
 -----
 
 -- | A variant
-data Vrt (fld :: Fld k v Type) (rho :: ROW k v) =
-    -- | INVARIANT The integer is the value's index in the row
-    --
-    -- For the most-recently added column of a given name, this tag is
-    -- equivalent to 'knownLT#'. See 'Row#'.
-    Vrt# !(Sem fld Any Any) Int#
+data Vrt :: Fld k v Type -> ROW k v -> Type where
+    Vrt :: {-# UNPACK #-} !(Idx.Idx nm a rho) -> !(Sem fld nm a) -> Vrt fld rho
 
 -- | An absurd value, since an empty variant is an empty type
 abd :: forall fld {ans}. Vrt fld Emp -> ans
 abd = error "Vrt.abd"
 
 -- | Extend a variant continuation's row by adding another case
-cas# :: KnownLT nm rho => Proxy# nm -> (Sem fld nm a -> ans) -> (Vrt fld rho -> ans) -> (Vrt fld (rho :& nm := a) -> ans)
-cas# = \nm f g vrt ->
-    let rho          = vrtRow# g
-        !(Vrt# a i#) = vrt
-    in
-    case compare (I# i#) (knownLT nm rho) of
-      LT -> g $ Vrt# a i#        
-      EQ -> unsafeCoerce f a   -- the nm column is the first thing in rho :& nm that's not less than nm
-      GT -> g $ Vrt# a (i# -# 1#)
+cas# ::
+     KnownLT nm rho
+  => Proxy# nm
+  -> (Sem fld nm a             -> ans)
+  -> (Vrt fld rho              -> ans)
+  -> (Vrt fld (rho :& nm := a) -> ans)
+cas# = \nm f g (Vrt idx x) ->
+    case Idx.nrw# nm idx of
+        Left Idx.ReflKV -> f x
+        Right idx'      -> g $ Vrt idx' x
 
 -- | Restrict a variant continuation's row by weakening it no longer handle a specific case
 wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt fld rho -> ans)
-wkn# = \nm f vrt ->
-    let rho          = row# vrt
-        !(Vrt# a i#) = vrt
-    in
-    case compare (I# i#) (knownLT nm rho) of
-      LT -> f $ Vrt# a  i#
-      EQ -> f $ Vrt# a (i# +# 1#)   -- the new nm column is the first thing in rho :& nm that's not less than nm
-      GT -> f $ Vrt# a (i# +# 1#)
+wkn# = \nm f (Vrt idx x) -> f $ Vrt (Idx.wdn# nm idx) x
 
 -- | Inject a value into the variant
---
--- See 'Select'.
-inj# :: KnownLT nm rho => Proxy# nm -> Sem fld nm (Select nm rho) -> Vrt fld rho
+inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Sem fld nm a -> Vrt fld (rho :& nm := a)
 inj# = \nm a ->
-    let vrt = Vrt# (unsafeCoerce a) (knownLT# nm (row# vrt))
+    let idx = Idx.idx# nm (row# vrt)
+        vrt = injAt idx a
     in
     vrt
+
+{-
+inj2# :: KnownLT nm rho => Proxy# nm -> Sem fld nm (Select nm rho) -> Vrt fld rho
+inj2# = \nm a ->
+    let idx = Idx.idx2# nm (row# vrt)
+        vrt = injAt idx a
+    in
+    vrt
+-}
+
+-----
+
+idxFromVrt :: Vrt (Con (Idx.EqualsKV nm a) `App` Nam `App` Img) rho -> Idx.Idx nm a rho
+idxFromVrt = \(Vrt idx Idx.ReflKV) -> idx
+
+vrtFromIdx :: Idx.Idx nm a rho -> Vrt (Con (Idx.EqualsKV nm a) `App` Nam `App` Img) rho
+vrtFromIdx = \idx -> Vrt idx Idx.ReflKV
+
+injAt :: Idx.Idx nm a rho -> Sem fld nm a -> Vrt fld rho
+injAt = Vrt
+
+prjAt :: Idx.Idx nm a rho -> Rcd fld rho -> Sem fld nm a
+prjAt idx rcd =
+    let Rcd#    sq = rcd
+        Idx.Idx i  = idx
+    in
+    unsafeCoerce $ Sq.index sq i
+
+-- | Each field has type @'Idx.Idx' nm a rho@
+idxs :: KnownLen rho => Rcd (Con Idx.Idx `App` Nam `App` Img `App` Con rho) rho
+idxs =
+    let rcd = Rcd# $ Sq.fromFunction (I# (knownLen# (row# rcd))) Idx.Idx
+    in
+    rcd
+
+{-
+-- | Each field is of type @'Vrt2' ('Con' ('EqualsKV' nm a) '``App``' 'Nam' '``App``' 'Img') rho@
+vrts ::
+     KnownLen rho
+  => Rcd
+       (Con Vrt2
+                -- ie Con (EqualsKV nm a) `App` Nam `App` Img
+          `App` (Con App `App` (Con App `App` (Con Con `App` (Con EqualsKV `App` Nam `App` Img)) `App` Con Nam) `App` Con Img)
+          `App` Con rho
+       )
+       rho
+vrts =
+    let rcd = Rcd# $ Sq.fromFunction (I# (knownLen# (row# rcd))) $ \i -> Vrt2 (Idx.Idx i) (unsafeCoerce ReflKV)
+    in
+    rcd
+-}
 
 -----
 
@@ -181,14 +222,21 @@ lacking# = \_nm -> id
 
 -----
 
-class Fmap rv where
-  natro# :: Proxy# fld1 -> Proxy# fld2 -> (forall nm a. Sem fld1 nm a -> Sem fld2 nm a) -> rv fld1 rho -> rv fld2 rho
+class Fmap (rv :: Fld k v Type -> ROW k v -> Type) where
+  natro# :: Proxy# fld1 -> Proxy# fld2 -> (forall nm a. Proxy# nm -> Proxy# a -> Sem fld1 nm a -> Sem fld2 nm a) -> rv fld1 rho -> rv fld2 rho
 
 instance Fmap Rcd where
-  natro# = \_fld1 _fld2 f (Rcd# sq) -> Rcd# $ f @Any @Any <$> sq
+  natro# = \_fld1 _fld2 f (Rcd# sq) -> Rcd# $ f (proxy# @Any) (proxy# @Any) <$> sq
 
 instance Fmap Vrt where
-  natro# = \_fld1 _fld2 f (Vrt# a i) -> Vrt# (f @Any @Any a) i
+  natro# = \_fld1 _fld2 f (Vrt idx x) ->
+      let kidx# :: Idx.Idx nm a rho -> Proxy# nm
+          kidx# _ = proxy#
+
+          vidx# :: Idx.Idx nm a rho -> Proxy# a
+          vidx# _ = proxy#
+      in
+      Vrt idx (f (kidx# idx) (vidx# idx) x)
 
 -----
 
@@ -219,10 +267,10 @@ type family SplatF (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> 
 
 class Splat (err :: Err) (l :: Fld k v Type -> ROW k v -> Type) (r :: Fld k v Type -> ROW k v -> Type) where splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
 
-instance Splat err Rcd Rcd where splat# = \_err (Rcd# l)    (Rcd# r)    -> Rcd# $ Sq.zipWith unsafeCoerce l r
-instance Splat err Rcd Vrt where splat# = \_err (Rcd# l)    (Vrt# r i#) -> Vrt# (Sq.index l (I# i#) `unsafeCoerce` r) i#
-instance Splat err Vrt Rcd where splat# = \_err (Vrt# l i#) (Rcd# r)    -> Vrt# (Sq.index r (I# i#) `unsafeCoerce` l) i#
-instance Splat err Vrt Vrt where splat# = \_err (Vrt# l l#) (Vrt# r r#) -> if I# l# /= I# r# then Nothing else Just $ Vrt# (l `unsafeCoerce` r) l#
+instance Splat err Rcd Rcd where splat# = \_err (Rcd# l)     (Rcd# r)     -> Rcd# $ Sq.zipWith unsafeCoerce l r
+instance Splat err Rcd Vrt where splat# = \_err rcd          (Vrt idx r)  -> Vrt idx (prjAt idx rcd $ r)
+instance Splat err Vrt Rcd where splat# = \_err (Vrt idx l)  rcd          -> Vrt idx (l $ prjAt idx rcd)
+instance Splat err Vrt Vrt where splat# = \_err (Vrt idxL l) (Vrt idxR r) -> case Idx.compareIdx idxL idxR of Idx.EQ' Idx.ReflKV -> Just $ Vrt idxL (l r); _ -> Nothing
 
 -----
 
@@ -247,5 +295,5 @@ type family ToFieldsF (t :: Fld k v Type -> ROW k v -> Type) (a :: Type) :: Type
 
 class ToFields (err :: Err) t where toFields# :: Proxy# err -> t (Con a) rho -> ToFieldsF t a
 
-instance ToFields err Rcd where toFields# = \_err (Rcd# sq ) -> unsafeCoerce `map` Foldable.toList sq
-instance ToFields err Vrt where toFields# = \_err (Vrt# x _) -> unsafeCoerce x
+instance ToFields err Rcd where toFields# = \_err (Rcd# sq)    -> unsafeCoerce `map` Foldable.toList sq
+instance ToFields err Vrt where toFields# = \_err (Vrt _idx x) -> x

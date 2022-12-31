@@ -16,6 +16,7 @@ library
   exposed-modules:
                        BriskRows
                        BriskRows.Internal
+                       BriskRows.Internal.PP
                        BriskRows.Plugin
 
   default-language:    Haskell2010

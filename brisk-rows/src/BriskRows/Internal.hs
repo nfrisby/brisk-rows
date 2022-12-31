@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -26,15 +27,19 @@ module BriskRows.Internal (
     Emp,
     Ext, (:&),
     -- ** Queries
+    Find,
+    FindResult (Found, NoSuchColumn),
     Select,
     -- ** Constraints
     Absent,
     KnownLT (knownLT#),
     KnownLen (knownLen#),
     Lacks,
-    -- * Name Order
+    -- * Names
     CmpName,
     Lexico,
+    ShowName (docName),
+    docName#,
     -- * Auxiliary
     Err,
     NoErr,
@@ -43,13 +48,16 @@ module BriskRows.Internal (
 
 import           Data.Kind (Type)
 import           Data.List.NonEmpty (NonEmpty ((:|)))
-import           Data.Proxy (Proxy)
+import           Data.Proxy (Proxy (Proxy))
 import qualified Data.Type.Ord
 import           GHC.Exts (Proxy#, proxy#)
 import           GHC.Prim (Int#, (+#))
 import           GHC.Tuple (Solo (Solo))
 import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType), TypeError)
-import           GHC.TypeLits (Nat, Symbol)
+import           GHC.TypeLits (Natural, Symbol)
+import qualified GHC.TypeLits as TypeLits
+
+import qualified BriskRows.Internal.PP as PP
 
 -----
 
@@ -127,6 +135,12 @@ type family Cons
   where
     Cons nm a (Row# cols) = Row# (nm := a ': cols)
 
+class ShowName (nm :: k) where
+    docName :: proxy nm -> PP.Doc
+
+docName# :: forall {nm}. ShowName nm => Proxy# nm -> PP.Doc
+docName# _nm = docName (Proxy @nm)
+
 -----
 
 infixl `Lexico`
@@ -142,15 +156,22 @@ type family Lexico (l :: Ordering) (r :: Ordering) :: Ordering
 
 -----
 
-type instance CmpName @Char   l r = Data.Type.Ord.Compare l r
-type instance CmpName @Nat    l r = Data.Type.Ord.Compare l r
+type instance CmpName @Char l r = Data.Type.Ord.Compare l r
+instance TypeLits.KnownChar c => ShowName (c :: Char) where docName c = PP.docShowS $ shows $ TypeLits.charVal c
+
+type instance CmpName @Natural l r = Data.Type.Ord.Compare l r
+instance TypeLits.KnownNat n => ShowName (n :: Natural) where docName n = PP.docShowS $ shows $ TypeLits.natVal n
+
 type instance CmpName @Symbol l r = Data.Type.Ord.Compare l r
+instance TypeLits.KnownSymbol s => ShowName (s :: Symbol) where docName s = PP.docShowS $ shows $ TypeLits.symbolVal s
 
 type instance CmpName @Bool l r = CmpBool l r
 type family CmpBool (l :: Bool) (r :: Bool) :: Ordering
   where
     CmpBool False _     = LT
     CmpBool _     False = GT
+instance ShowName True  where docName _prx = PP.docShowS $ shows True
+instance ShowName False where docName _prx = PP.docShowS $ shows False
 
 type instance CmpName @Ordering l r = CmpOrdering l r
 type family CmpOrdering (l :: Ordering) (r :: Ordering) :: Ordering
@@ -160,6 +181,9 @@ type family CmpOrdering (l :: Ordering) (r :: Ordering) :: Ordering
     CmpOrdering EQ _  = LT
     CmpOrdering _  EQ = GT
     CmpOrdering _  _  = GT
+instance ShowName LT where docName _prx = PP.docShowS $ shows LT
+instance ShowName EQ where docName _prx = PP.docShowS $ shows EQ
+instance ShowName GT where docName _prx = PP.docShowS $ shows GT
 
 type instance CmpName @(Maybe k) l r = CmpMaybe l r
 type family CmpMaybe (l :: Maybe k) (r :: Maybe k) :: Ordering
@@ -167,6 +191,8 @@ type family CmpMaybe (l :: Maybe k) (r :: Maybe k) :: Ordering
     CmpMaybe Nothing  _        = LT
     CmpMaybe _        Nothing  = GT
     CmpMaybe (Just l) (Just r) = CmpName l r
+instance ShowName Nothing where docName _prx = PP.docString "Nothing"
+instance ShowName a => ShowName (Just a) where docName _prx = PP.docString "Just" `PP.docApp` docName (Proxy @a)
 
 type instance CmpName @(Either k0 k1) l r = CmpEither l r
 type family CmpEither (l :: Either k0 k1) (r :: Either k0 k1) :: Ordering
@@ -175,6 +201,8 @@ type family CmpEither (l :: Either k0 k1) (r :: Either k0 k1) :: Ordering
     CmpEither (Left  _) _         = LT
     CmpEither _         (Left  _) = GT
     CmpEither (Right l) (Right r) = CmpName l r
+instance ShowName a => ShowName (Left  a) where docName _prx = PP.docString "Left"  `PP.docApp` docName (Proxy @a)
+instance ShowName a => ShowName (Right a) where docName _prx = PP.docString "Right" `PP.docApp` docName (Proxy @a)
 
 type instance CmpName @[k] l r = CmpList l r
 type family CmpList (l :: [k]) (r :: [k]) :: Ordering
@@ -182,28 +210,46 @@ type family CmpList (l :: [k]) (r :: [k]) :: Ordering
     CmpList '[]       _         = LT
     CmpList _         '[]       = GT
     CmpList (l ': ls) (r ': rs) = CmpName l r `Lexico` CmpName ls rs
+instance ShowNameList as => ShowName as where
+    docName prx = case docNameList prx of
+        []   -> PP.docString "'[]"
+        x:xs -> PP.docList (if "'" == take 1 (show x) then "'[ " else "'[") ", " "]" (x:xs)
+class                                     ShowNameList (as :: [k]) where docNameList :: proxy as -> [PP.Doc]
+instance                                  ShowNameList '[]         where docNameList _prx = []
+instance (ShowName a, ShowNameList as) => ShowNameList (a ': as)   where docNameList _prx = docName (Proxy @a) : docNameList (Proxy @as)
 
 type instance CmpName @(NonEmpty k) (l :| ls) (r :| rs) = CmpName l r `Lexico` CmpName ls rs
+instance (ShowName a, ShowName as) => ShowName (a :| as) where docName _prx = PP.docBop " :| " PP.RightFix 5 (docName (Proxy @a)) (docName (Proxy @as))
 
 type instance CmpName @() l r = CmpNameEQ   -- just to suppress unused binding warning
+instance ShowName ('() :: ()) where docName _prx = PP.docString "'()"
 
 type instance CmpName @(Proxy k) l r = EQ
+instance ShowName 'Proxy where docName _prx = PP.docString "Proxy"
 
 type instance CmpName @(Solo k) ('Solo l) ('Solo r) = CmpName l r
+instance ShowName a => ShowName ('Solo a) where docName _prx = PP.docString "Solo" `PP.docApp` docName (Proxy @a)
 
 type instance CmpName @(k0, k1) '(l0, l1) '(r0, r1) = CmpName l0 r0 `Lexico` CmpName l1 r1
+instance (ShowName a, ShowName b) => ShowName '(a, b) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b)]
 
 type instance CmpName @(k0, k1, k2) '(l0, l1, l2) '(r0, r1, r2) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2
+instance (ShowName a, ShowName b, ShowName c) => ShowName '(a, b, c) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c)]
 
 type instance CmpName @(k0, k1, k2, k3) '(l0, l1, l2, l3) '(r0, r1, r2, r3) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3
+instance (ShowName a, ShowName b, ShowName c, ShowName d) => ShowName '(a, b, c, d) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c), docName (Proxy @d)]
 
 type instance CmpName @(k0, k1, k2, k3, k4) '(l0, l1, l2, l3, l4) '(r0, r1, r2, r3, r4) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4
+instance (ShowName a, ShowName b, ShowName c, ShowName d, ShowName e) => ShowName '(a, b, c, d, e) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c), docName (Proxy @d), docName (Proxy @e)]
 
 type instance CmpName @(k0, k1, k2, k3, k4, k5) '(l0, l1, l2, l3, l4, l5) '(r0, r1, r2, r3, r4, r5) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4 `Lexico` CmpName l5 r5
+instance (ShowName a, ShowName b, ShowName c, ShowName d, ShowName e, ShowName f) => ShowName '(a, b, c, d, e, f) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c), docName (Proxy @d), docName (Proxy @e), docName (Proxy @f)]
 
 type instance CmpName @(k0, k1, k2, k3, k4, k5, k6) '(l0, l1, l2, l3, l4, l5, l6) '(r0, r1, r2, r3, r4, r5, r6) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4 `Lexico` CmpName l5 r5 `Lexico` CmpName l6 r6
+instance (ShowName a, ShowName b, ShowName c, ShowName d, ShowName e, ShowName f, ShowName g) => ShowName '(a, b, c, d, e, f, g) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c), docName (Proxy @d), docName (Proxy @e), docName (Proxy @f), docName (Proxy @g)]
 
 type instance CmpName @(k0, k1, k2, k3, k4, k5, k6, k7) '(l0, l1, l2, l3, l4, l5, l6, l7) '(r0, r1, r2, r3, r4, r5, r6, r7) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4 `Lexico` CmpName l5 r5 `Lexico` CmpName l6 r6 `Lexico` CmpName l7 r7
+instance (ShowName a, ShowName b, ShowName c, ShowName d, ShowName e, ShowName f, ShowName g, ShowName h) => ShowName '(a, b, c, d, e, f, g, h) where docName _prx = PP.docList "'(" ", " ")" [docName (Proxy @a), docName (Proxy @b), docName (Proxy @c), docName (Proxy @d), docName (Proxy @e), docName (Proxy @f), docName (Proxy @g), docName (Proxy @h)]
 
 type instance CmpName @(k0, k1, k2, k3, k4, k5, k6, k7, k8) '(l0, l1, l2, l3, l4, l5, l6, l7, l8) '(r0, r1, r2, r3, r4, r5, r6, r7, r8) = CmpName l0 r0 `Lexico` CmpName l1 r1 `Lexico` CmpName l2 r2 `Lexico` CmpName l3 r3 `Lexico` CmpName l4 r4 `Lexico` CmpName l5 r5 `Lexico` CmpName l6 r6 `Lexico` CmpName l7 r7 `Lexico` CmpName l8 r8
 
@@ -379,7 +425,9 @@ type family Restrict_Ordering
 
 -- | The image of this name in the row
 --
--- If multiple columns have the same name, it selects the outermost.
+-- If multiple columns have the same name, it returns the outermost.
+--
+-- TODO does this encourage subtle bugs? Only use 'Find' instead?
 type family Select (nm :: k) (rho :: ROW k v) :: v
   where
     Select nm (Row# '[]             ) = TypeError (NotFound nm)
@@ -397,6 +445,31 @@ type family Select_Ordering
     Select_Ordering err LT nm x b cols = TypeError (NotFound nm)
     Select_Ordering err EQ nm x b cols = b
     Select_Ordering err GT nm x b cols = Select nm (Row# cols)
+
+-----
+
+data FindResult k v = Found v | NoSuchColumn k
+
+-- | The image of this name in the row, if any
+--
+-- If multiple columns have the same name, it returns the outermost.
+type family Find (nm :: k) (rho :: ROW k v) :: FindResult k v
+  where
+    Find nm (Row# '[]             ) = NoSuchColumn nm
+    Find nm (Row# (x := b ': cols)) = Find_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
+
+type family Find_Ordering
+    (  err :: Err       )
+    (    o :: Ordering  )
+    (   nm :: k         )
+    (    x :: k         )
+    (    b :: v         )
+    ( cols :: [COL k v] )
+           :: FindResult k v
+  where
+    Find_Ordering err LT nm x b cols = NoSuchColumn nm
+    Find_Ordering err EQ nm x b cols = Found b
+    Find_Ordering err GT nm x b cols = Find nm (Row# cols)
 
 -----
 

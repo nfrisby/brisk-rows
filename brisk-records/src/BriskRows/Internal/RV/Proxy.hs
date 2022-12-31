@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE ExplicitForAll #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PolyKinds #-}
@@ -43,7 +44,7 @@ delP :: forall {nm} {rho} {proxy} {a}. KnownLT nm rho => proxy nm -> Rcd (rho :&
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: forall {nm} {rho} {proxy}. KnownLT nm rho => proxy nm -> Rcd rho -> Select nm rho
+prjP :: forall {nm} {a} {rho} {proxy}. KnownLT nm (rho :& nm := a) => proxy nm -> Rcd (rho :& nm := a) -> a
 prjP = \nm -> prj# (name# nm)
 
 -----
@@ -57,7 +58,7 @@ wknP :: forall {nm} {rho} {proxy} {a} {ans}. KnownLT nm rho => proxy nm -> (Vrt 
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: forall {nm} {rho} {proxy}. KnownLT nm rho => proxy nm -> Select nm rho -> Vrt rho
+injP :: forall {nm} {a} {rho} {proxy}. KnownLT nm (rho :& nm := a) => proxy nm -> a -> Vrt (rho :& nm := a)
 injP = \nm -> inj# (name# nm)
 
 -----

@@ -1,5 +1,6 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -39,7 +40,7 @@ del :: forall nm {a} {rho} {f}. KnownLT nm rho => Rcd f (rho :& nm := a) -> Rcd 
 del = del# (proxy# @nm)
 
 -- | Alias of 'prj#'
-prj :: forall nm {rho} {f}. KnownLT nm rho => Rcd f rho -> f nm (Select nm rho)
+prj :: forall nm {a} {rho} {f}. KnownLT nm (rho :& nm := a) => Rcd f (rho :& nm := a) -> f nm a
 prj = prj# (proxy# @nm)
 
 -----
@@ -53,7 +54,7 @@ wkn :: forall nm {a} {rho} {f} {ans}. KnownLT nm rho => (Vrt f (rho :& nm := a) 
 wkn = wkn# (proxy# @nm)
 
 -- | Alias of 'inj#'
-inj :: forall nm {rho} {f}. KnownLT nm rho => f nm (Select nm rho) -> Vrt f rho
+inj :: forall nm {a} {rho} {f}. KnownLT nm (rho :& nm := a) => f nm a -> Vrt f (rho :& nm := a)
 inj = inj# (proxy# @nm)
 
 -----

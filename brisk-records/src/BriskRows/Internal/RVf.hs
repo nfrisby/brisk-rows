@@ -34,6 +34,7 @@ module BriskRows.Internal.RVf (
     wkn#,
     -- * Both
     Splat (splat#),
+    SplatF,
     asFldOf,
     idFldOf#,
     lacking#,
@@ -66,10 +67,13 @@ del# :: KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> Rcd fld rho
 del# = \nm (Rcd rcd) -> Rcd $ RVtf.del# nm rcd
 
 -- | Project a value out of the record
---
--- See 'Select'.
-prj# :: KnownLT nm rho => Proxy# nm -> Rcd fld rho -> fld nm (Select nm rho)
+prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> fld nm a
 prj# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
+
+{-
+prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> fld nm a
+prj2# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
+-}
 
 -----
 
@@ -90,10 +94,13 @@ wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt
 wkn# = \nm fld (Vrt vrt) -> RVtf.wkn# nm (fld . Vrt) vrt
 
 -- | Inject a value into the variant
---
--- See 'Select'.
-inj# :: KnownLT nm rho => Proxy# nm -> fld nm (Select nm rho) -> Vrt fld rho
+inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> fld nm a -> Vrt fld (rho :& nm := a)
 inj# = \nm a -> Vrt $ RVtf.inj# nm a
+
+{-
+inj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> fld nm a -> Vrt fld rho
+inj2# = \nm a -> Vrt $ RVtf.inj2# nm a
+-}
 
 -----
 
@@ -136,10 +143,10 @@ class Splat (err :: Err) (l :: (k -> v -> Type) -> ROW k v -> Type) (r :: (k -> 
   where
     splat# :: Proxy# err -> l (fld1 :->: fld2) rho -> r fld1 rho -> SplatF l r fld2 rho
 
-instance Splat err Rcd Rcd where splat# = \err (Rcd l) (Rcd r) -> Rcd $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
-instance Splat err Rcd Vrt where splat# = \err (Rcd l) (Vrt r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
-instance Splat err Vrt Rcd where splat# = \err (Vrt l) (Rcd r) -> Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
-instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> Vrt <$> RVtf.splat# err (RVtf.natro# proxy# proxy# unA l) r
+instance Splat err Rcd Rcd where splat# = \err (Rcd l) (Rcd r) ->      Rcd $ RVtf.splat# err (RVtf.natro# proxy# proxy# (\_nm _a -> unA) l) r
+instance Splat err Rcd Vrt where splat# = \err (Rcd l) (Vrt r) ->      Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# (\_nm _a -> unA) l) r
+instance Splat err Vrt Rcd where splat# = \err (Vrt l) (Rcd r) ->      Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# (\_nm _a -> unA) l) r
+instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> fmap Vrt $ RVtf.splat# err (RVtf.natro# proxy# proxy# (\_nm _a -> unA) l) r
 
 -----
 
@@ -149,5 +156,5 @@ instance RVtf.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) (Row# cols
 dicts# :: forall {c} {rho}. AllCols c rho => Proxy# c -> Rcd (D c) rho
 dicts# _prx =
     Rcd
-  $ RVtf.natro# proxy# proxy# (\Sem.Dict -> D)
+  $ RVtf.natro# proxy# proxy# (\_nm _a Sem.Dict -> D)
   $ RVtf.dicts# (proxy# @(Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img))

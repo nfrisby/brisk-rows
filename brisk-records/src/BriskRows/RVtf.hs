@@ -1,5 +1,7 @@
 {-# LANGUAGE MagicHash #-}
 
+-- | This module is a variation of "BriskRows.RVf" that expresses the top-level
+-- structure common to all fields in a different, more flexible way.
 module BriskRows.RVtf (
     module BriskRows,
     -- * Records

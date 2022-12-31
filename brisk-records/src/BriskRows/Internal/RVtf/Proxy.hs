@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE PolyKinds #-}
@@ -43,7 +44,7 @@ delP :: KnownLT nm rho => name nm -> Rcd f (rho :& nm := a) -> Rcd f rho
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: KnownLT nm rho => proxy nm -> Rcd f rho -> Sem f nm (Select nm rho)
+prjP :: KnownLT nm (rho :& nm := a) => proxy nm -> Rcd f (rho :& nm := a) -> Sem f nm a
 prjP = \nm -> prj# (name# nm)
 
 -----
@@ -57,7 +58,7 @@ wknP :: KnownLT nm rho => name nm -> (Vrt f (rho :& nm := a) -> ans) -> (Vrt f r
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: KnownLT nm rho => proxy nm -> Sem f nm (Select nm rho) -> Vrt f rho
+injP :: KnownLT nm (rho :& nm := a) => proxy nm -> Sem f nm a -> Vrt f (rho :& nm := a)
 injP = \nm -> inj# (name# nm)
 
 -----

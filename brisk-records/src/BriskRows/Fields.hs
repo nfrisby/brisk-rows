@@ -15,19 +15,34 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE ViewPatterns #-}
 
+-- | The structure of fields in "BriskRows.RVf".
+--
+-- These definitions exhibit the same triplication as the record and variant
+-- operations: type applications, unlifted proxies, and lifted proxies.
 module BriskRows.Fields (
-  -- * Field structure combinators
+  -- * Arrow
   A (A, A#, AP), (:->:), unA, unA#, unAP,
+  -- * Composition
   C (C, C#, CP), (:.:), unC, unC#, unCP,
+  -- * Dictionary
   D (D, D#, DP), withD, withD#, withDP,
+  -- * Empty
   E, unE, unE#, unEP,
+  -- * Identity
   I (I, I#, IP), unI, unI#, unIP, withI, withI#, withIP,
+  -- * Constant
   K (K, K#, KP), unK, unK#, unKP, withK, withK#, withKP,
+  -- * Product
   P (P, P#, PP), (:*:), unP, unP#, unPP,
+  -- * Sum
   S (L, L#, LP, R, R#, RP), (:+:), unS, unS#, unSP,
+  -- * Column name
   N (N, N#, NP), unN, unN#, unNP,
+  -- * Column value
   V (V, V#, VP), unV, unV#, unVP,
+  -- * Unit
   U (U, U#, UP), unU, unU#, unUP,
+  -- * Join
   Y (Y, Y#, YP), unY, unY#, unYP,
   ) where
 
@@ -81,6 +96,8 @@ withIP = \_k -> withI
 -----
 
 -- | Constant
+--
+-- We reserve 'C' instead for composition.
 newtype K b k v = K b
   deriving (Eq, Generic, Ord, Show)
 
@@ -371,6 +388,8 @@ unUP = \_k -> unU
 -----
 
 -- | Empty
+--
+-- Typically named 'Data.Void.Void', but we reserve 'V' for column value.
 data E k v
   deriving (Eq, Generic, Ord, Show)
 

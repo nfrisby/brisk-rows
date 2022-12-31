@@ -64,9 +64,7 @@ del# :: forall {nm} {rho} {a}. KnownLT nm rho => Proxy# nm -> Rcd (rho :& nm := 
 del# = \nm (Rcd rcd) -> Rcd $ RVf.del# nm rcd
 
 -- | Project a value out of the record
---
--- See 'Select'.
-prj# :: forall {nm} {rho}. KnownLT nm rho => Proxy# nm -> Rcd rho -> Select nm rho
+prj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd (rho :& nm := a) -> a
 prj# = \nm (Rcd rcd) -> Fields.unI $ RVf.prj# nm rcd
 
 -----
@@ -87,13 +85,7 @@ wkn# :: forall {nm} {rho} {a} {ans}. KnownLT nm rho => Proxy# nm -> (Vrt (rho :&
 wkn# = \nm f (Vrt vrt) -> RVf.wkn# nm (f . Vrt) vrt
 
 -- | Inject a value into the variant
---
--- TODO should this be @a -> Vrt (rho :& nm := a)@? The current signature
--- assumes the row type will be fixed elsewhere. I suppose that is appropriate,
--- given the pervasive @brisk-rows@ staticness constraint.
---
--- See 'Select'.
-inj# :: forall {nm} {rho}. KnownLT nm rho => Proxy# nm -> Select nm rho -> Vrt rho
+inj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> a -> Vrt (rho :& nm := a)
 inj# = \nm a -> Vrt $ RVf.inj# nm (Fields.I a)
 
 -----
