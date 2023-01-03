@@ -14,7 +14,7 @@ module BriskRows.Idx (
   Idx (Idx),
   compareIdx,
   idx#,
---  idx2#,
+  idx2#,
   idxInt,
   nrw#,
   wdn#,
@@ -66,14 +66,12 @@ idx# ::
   -> Idx nm a (rho :& nm := a)
 idx# = \nm rho -> Idx $ knownLT nm rho
 
-{-
 idx2# ::
      (KnownLT nm rho, Found a ~ Find nm rho)
   => Proxy# nm
   -> Proxy# rho
   -> Idx nm a rho
 idx2# = \nm rho -> Idx $ knownLT nm rho
--}
 
 -- | Widen the row
 wdn# ::

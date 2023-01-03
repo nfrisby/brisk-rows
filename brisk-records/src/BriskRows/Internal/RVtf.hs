@@ -30,6 +30,7 @@ module BriskRows.Internal.RVtf (
     ins#,
     natro#,
     prj#,
+    prj2#,
     prjAt,
     pur#,
     -- * Variants
@@ -97,14 +98,12 @@ del# = \nm rcd ->
     in
     rcd'
 
-{-
-prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
-prj2# = \nm rcd -> prjAt (Idx.idx2# nm (row# rcd)) rcd
--}
-
 -- | Project a value out of the record
 prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
 prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
+
+prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
+prj2# = \nm rcd -> prjAt (Idx.idx2# nm (row# rcd)) rcd
 
 -----
 

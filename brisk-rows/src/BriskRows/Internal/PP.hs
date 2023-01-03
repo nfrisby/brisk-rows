@@ -1,16 +1,17 @@
 {-# LANGUAGE LambdaCase #-}
 
+-- | Derived from /Unparsing Expressions With Prefix and Postfix Operators/ by Norman Ramsey, 1998.
 module BriskRows.Internal.PP (
   Prec (Prec),
   Assoc (LeftAssoc, NonAssoc, RightAssoc),
   Doc,
-  Fixity (LeftFix, Prefix, NonFix, RightFix),
   docApp,
   docBop,
   docList,
   docParens,
   docShowS,
   docString,
+  docTypeApp,
   ) where
 
 -----
@@ -24,13 +25,10 @@ newtype Prec = Prec Int
 
 -- page 12
 data Assoc = LeftAssoc | RightAssoc | NonAssoc
-
--- page 12
-data Fixity = Prefix | LeftFix | RightFix | NonFix
   deriving (Eq)
 
 -- page 12
-data Op = Op !Prec !Fixity
+data Op = Op !Prec !Assoc
 
 data MinOp = NoOp | MinOp !Op
 
@@ -59,7 +57,7 @@ docList open sep close docs =
         Nothing           -> id
         Just (x NE.:| ys) -> unDoc x . foldr (\y acc -> showString sep . unDoc y . acc) id ys
 
-docBop :: String -> Fixity -> Int -> Doc -> Doc -> Doc
+docBop :: String -> Assoc -> Int -> Doc -> Doc -> Doc
 docBop sM f p (Doc mopL sL) (Doc mopR sR) =
     Doc
       (MinOp opM)
@@ -71,8 +69,13 @@ docBop sM f p (Doc mopL sL) (Doc mopR sR) =
 
 infixl `docApp`
 
+-- | Application in Haskell is juxtaposition as a binary operator
 docApp :: Doc -> Doc -> Doc
-docApp = docBop " " LeftFix 10
+docApp = docBop " " LeftAssoc 10
+
+-- | Type application in Haskell is @\@| as a binary operator
+docTypeApp :: Doc -> Doc -> Doc
+docTypeApp = docBop " @" LeftAssoc 10
 
 parens :: MinOp -> Op -> Assoc -> Bool
 parens = \case
@@ -84,8 +87,7 @@ noparens :: Op -> Op -> Assoc -> Bool
 noparens (Op pI fI) (Op pO fO) side =
     (pI > pO) ||
     case (fI, side) of
-        (Prefix,   RightAssoc) -> True
-        (LeftFix,  LeftAssoc ) -> pI == pO && fO == LeftFix
-        (RightFix, RightAssoc) -> pI == pO && fO == RightFix
-        (_,        NonAssoc  ) -> fI == fO
-        _                      -> False
+        (LeftAssoc,  LeftAssoc ) -> pI == pO && fO == LeftAssoc
+        (RightAssoc, RightAssoc) -> pI == pO && fO == RightAssoc
+        (_,          NonAssoc  ) -> fI == fO
+        _                        -> False

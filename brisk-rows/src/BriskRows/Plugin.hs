@@ -252,7 +252,7 @@ getExtend env ty = case TcType.tcSplitTyConApp_maybe ty of
 --
 -- Also, it only does /Improvement/.
 -- It does not improve Givens.
--- To improve Derived/Wanteds, it adds missing Deriveds.
+-- To improve Wanteds, it adds missing Wanteds.
 --
 -- > rho :& nm := l ~ rho :& nm := r   implies/requires   l ~ r
 --

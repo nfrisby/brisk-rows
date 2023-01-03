@@ -69,7 +69,7 @@ data Err
 type family NoErr :: Err where {}
 
 -- This indirection is enough to disarm the errors while GHC compiles this module
-type family TypeErr (err :: ErrorMessage) :: Err where -- TypeErr err = TypeError err
+type family TypeErr (err :: ErrorMessage) :: Err where TypeErr err = TypeError err
 
 -----
 ----- specific error messages for code in this module
@@ -219,7 +219,7 @@ instance                                  ShowNameList '[]         where docName
 instance (ShowName a, ShowNameList as) => ShowNameList (a ': as)   where docNameList _prx = docName (Proxy @a) : docNameList (Proxy @as)
 
 type instance CmpName @(NonEmpty k) (l :| ls) (r :| rs) = CmpName l r `Lexico` CmpName ls rs
-instance (ShowName a, ShowName as) => ShowName (a :| as) where docName _prx = PP.docBop " :| " PP.RightFix 5 (docName (Proxy @a)) (docName (Proxy @as))
+instance (ShowName a, ShowName as) => ShowName (a :| as) where docName _prx = PP.docBop " :| " PP.RightAssoc 5 (docName (Proxy @a)) (docName (Proxy @as))
 
 type instance CmpName @() l r = CmpNameEQ   -- just to suppress unused binding warning
 instance ShowName ('() :: ()) where docName _prx = PP.docString "'()"
@@ -483,4 +483,4 @@ infixl 5 :&
 -- | Operator alias of 'Ext'
 --
 -- This let's you write @rho ':&' nm ':=' a@ instead of @'Ext' nm a rho@.
-type row :& col = Extend_Col (TypeErr (AbstractCOL col)) col row
+type rho :& col = Extend_Col (TypeErr (AbstractCOL col)) col rho
