@@ -14,7 +14,7 @@ module BriskRows.Idx (
   Idx (Idx),
   compareIdx,
   idx#,
-  idx2#,
+  idx1#,
   idxInt,
   nrw#,
   wdn#,
@@ -50,7 +50,8 @@ newtype Idx (nm :: k) (a :: v) (rho :: ROW k v) = Idx Int
 idxInt :: Idx nm a rho -> Int
 idxInt (Idx i) = i
 
-data Ordering' nmL aL nmR aR = LT' | EQ' {-# UNPACK #-} !(EqualsKV nmL aL nmR aR) | GT'
+data Ordering' nmL aL nmR aR =
+    LT' | EQ' {-# UNPACK #-} !(EqualsKV nmL aL nmR aR) | GT'
 
 compareIdx :: Idx nmL aL rho -> Idx nmR aR rho -> Ordering' nmL aL nmR aR
 compareIdx (Idx l) (Idx r) = case compare l r of
@@ -58,20 +59,21 @@ compareIdx (Idx l) (Idx r) = case compare l r of
     EQ -> EQ' $ unsafeCoerce ReflKV
     GT -> GT'
 
--- | The index of the given column name
-idx# ::
-     KnownLT nm (rho :& nm := a)
+-- | The index of the outermost column with the given name
+idx1# ::
+     KnownLT nm rho
   => Proxy# nm
-  -> Proxy# (rho :& nm := a)
+  -> Proxy# rho
   -> Idx nm a (rho :& nm := a)
-idx# = \nm rho -> Idx $ knownLT nm rho
+idx1# = \nm rho -> Idx $ knownLT nm rho
 
-idx2# ::
+-- | The index of the outermost column with the given name
+idx# ::
      (KnownLT nm rho, Found a ~ Find nm rho)
   => Proxy# nm
   -> Proxy# rho
   -> Idx nm a rho
-idx2# = \nm rho -> Idx $ knownLT nm rho
+idx# = \nm rho -> Idx $ knownLT nm rho
 
 -- | Widen the row
 wdn# ::

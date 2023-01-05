@@ -64,8 +64,10 @@ del# :: forall {nm} {rho} {a}. KnownLT nm rho => Proxy# nm -> Rcd (rho :& nm := 
 del# = \nm (Rcd rcd) -> Rcd $ RVf.del# nm rcd
 
 -- | Project a value out of the record
-prj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd (rho :& nm := a) -> a
+prj# :: forall {nm} {rho} {a}. (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd rho -> a
 prj# = \nm (Rcd rcd) -> Fields.unI $ RVf.prj# nm rcd
+
+-- prj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd (rho :& nm := a) -> a
 
 -----
 
@@ -85,8 +87,10 @@ wkn# :: forall {nm} {rho} {a} {ans}. KnownLT nm rho => Proxy# nm -> (Vrt (rho :&
 wkn# = \nm f (Vrt vrt) -> RVf.wkn# nm (f . Vrt) vrt
 
 -- | Inject a value into the variant
-inj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> a -> Vrt (rho :& nm := a)
+inj# :: forall {nm} {rho} {a}. (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> a -> Vrt rho
 inj# = \nm a -> Vrt $ RVf.inj# nm (Fields.I a)
+
+-- inj# :: forall {nm} {rho} {a}. KnownLT nm (rho :& nm := a) => Proxy# nm -> a -> Vrt (rho :& nm := a)
 
 -----
 

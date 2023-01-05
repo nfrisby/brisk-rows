@@ -41,9 +41,12 @@ module BriskRows.Internal (
     ShowName (docName),
     docName#,
     -- * Auxiliary
+    Extend_Col,
     Err,
     NoErr,
     TypeErr,
+    UnfoldExt,
+    UnfoldExtOp,
     ) where
 
 import           Data.Kind (Type)
@@ -82,7 +85,7 @@ type NotFound (nm :: k) = Text "This column is not in the row! " :<>: ShowType n
 
 type NotAbsent (nm :: k) = Text "This column is not absent in the row! " :<>: ShowType nm
 
-type AbstractROW (rho :: ROW k v) = Text "This row is not concrete! " :<>: ShowType rho
+type AbstractROW (rho :: ROW k v) = Text "Equality constraints with row type variables are disallowed! " :<>: ShowType rho
 
 type AbstractCOL (col :: COL k v) = Text "This column is not concrete! " :<>: ShowType col
 
@@ -476,11 +479,13 @@ type family Find_Ordering
 -- | Extend the row by inserting the given column
 --
 -- See ':&'.
-type Ext nm a rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
+type family Ext (nm :: k) (a :: v) (rho :: ROW k v) :: ROW k v where {}
+type UnfoldExt   nm        a        rho              = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 infixl 5 :&
 
 -- | Operator alias of 'Ext'
 --
 -- This let's you write @rho ':&' nm ':=' a@ instead of @'Ext' nm a rho@.
-type rho :& col = Extend_Col (TypeErr (AbstractCOL col)) col rho
+type family (:&) (rho :: ROW k v) (col :: COL k v) :: ROW k v where {}
+type UnfoldExtOp rho               col              = Extend_Col (TypeErr (AbstractCOL col)) col rho

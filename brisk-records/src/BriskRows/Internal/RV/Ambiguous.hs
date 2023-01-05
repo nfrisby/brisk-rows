@@ -40,8 +40,11 @@ del :: forall nm {a} {rho}. KnownLT nm rho => Rcd (rho :& nm := a) -> Rcd rho
 del = del# (proxy# @nm)
 
 -- | Alias of 'prj#'
-prj :: forall nm {a} {rho}. KnownLT nm (rho :& nm := a) => Rcd (rho :& nm := a) -> a
+prj :: forall nm {a} {rho}. (KnownLT nm rho, Found a ~ Find nm rho) => Rcd rho -> a
 prj = prj# (proxy# @nm)
+
+-- prj :: forall nm {a} {rho}. KnownLT nm (rho :& nm := a) => Rcd (rho :& nm := a) -> a
+
 
 -----
 
@@ -54,8 +57,10 @@ wkn :: forall nm {a} {rho} {ans}. KnownLT nm rho => (Vrt (rho :& nm := a) -> ans
 wkn = wkn# (proxy# @nm)
 
 -- | Alias of 'inj#'
-inj :: forall nm {a} {rho}. KnownLT nm (rho :& nm := a) => a -> Vrt (rho :& nm := a)
+inj :: forall nm {a} {rho}. (KnownLT nm rho, Found a ~ Find nm rho) => a -> Vrt rho
 inj = inj# (proxy# @nm)
+
+-- inj :: forall nm {a} {rho}. KnownLT nm (rho :& nm := a) => a -> Vrt (rho :& nm := a)
 
 -----
 

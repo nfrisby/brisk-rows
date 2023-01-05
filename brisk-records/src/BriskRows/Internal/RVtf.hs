@@ -30,7 +30,6 @@ module BriskRows.Internal.RVtf (
     ins#,
     natro#,
     prj#,
-    prj2#,
     prjAt,
     pur#,
     -- * Variants
@@ -98,12 +97,11 @@ del# = \nm rcd ->
     in
     rcd'
 
--- | Project a value out of the record
-prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
-prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
+-- prj2 :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
 
-prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
-prj2# = \nm rcd -> prjAt (Idx.idx2# nm (row# rcd)) rcd
+-- | Project a value out of the record
+prj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
+prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
 
 -----
 
@@ -148,21 +146,14 @@ wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt
 wkn# = \nm f (Vrt idx x) -> f $ Vrt (Idx.wdn# nm idx) x
 
 -- | Inject a value into the variant
-inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Sem fld nm a -> Vrt fld (rho :& nm := a)
+inj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Sem fld nm a -> Vrt fld rho
 inj# = \nm a ->
     let idx = Idx.idx# nm (row# vrt)
         vrt = injAt idx a
     in
     vrt
 
-{-
-inj2# :: KnownLT nm rho => Proxy# nm -> Sem fld nm (Select nm rho) -> Vrt fld rho
-inj2# = \nm a ->
-    let idx = Idx.idx2# nm (row# vrt)
-        vrt = injAt idx a
-    in
-    vrt
--}
+-- inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Sem fld nm a -> Vrt fld (rho :& nm := a)
 
 -----
 

@@ -44,8 +44,10 @@ delP :: KnownLT nm rho => name nm -> Rcd f (rho :& nm := a) -> Rcd f rho
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: KnownLT nm (rho :& nm := a) => proxy nm -> Rcd f (rho :& nm := a) -> Sem f nm a
+prjP :: (KnownLT nm rho, Found a ~ Find nm rho) => proxy nm -> Rcd f rho -> Sem f nm a
 prjP = \nm -> prj# (name# nm)
+
+-- prjP :: KnownLT nm (rho :& nm := a) => proxy nm -> Rcd f (rho :& nm := a) -> Sem f nm a
 
 -----
 
@@ -58,8 +60,10 @@ wknP :: KnownLT nm rho => name nm -> (Vrt f (rho :& nm := a) -> ans) -> (Vrt f r
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: KnownLT nm (rho :& nm := a) => proxy nm -> Sem f nm a -> Vrt f (rho :& nm := a)
+injP :: (KnownLT nm rho, Found a ~ Find nm rho) => proxy nm -> Sem f nm a -> Vrt f rho
 injP = \nm -> inj# (name# nm)
+
+-- injP :: KnownLT nm (rho :& nm := a) => proxy nm -> Sem f nm a -> Vrt f (rho :& nm := a)
 
 -----
 

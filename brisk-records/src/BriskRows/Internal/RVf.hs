@@ -67,13 +67,10 @@ del# :: KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> Rcd fld rho
 del# = \nm (Rcd rcd) -> Rcd $ RVtf.del# nm rcd
 
 -- | Project a value out of the record
-prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> fld nm a
+prj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> fld nm a
 prj# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
 
-{-
-prj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> fld nm a
-prj2# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
--}
+-- prj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> fld nm a
 
 -----
 
@@ -94,13 +91,10 @@ wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt
 wkn# = \nm fld (Vrt vrt) -> RVtf.wkn# nm (fld . Vrt) vrt
 
 -- | Inject a value into the variant
-inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> fld nm a -> Vrt fld (rho :& nm := a)
+inj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> fld nm a -> Vrt fld rho
 inj# = \nm a -> Vrt $ RVtf.inj# nm a
 
-{-
-inj2# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> fld nm a -> Vrt fld rho
-inj2# = \nm a -> Vrt $ RVtf.inj2# nm a
--}
+-- inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> fld nm a -> Vrt fld (rho :& nm := a)
 
 -----
 
