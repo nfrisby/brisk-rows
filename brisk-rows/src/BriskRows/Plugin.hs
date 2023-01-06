@@ -2,19 +2,23 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE Rank2Types #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 
 module BriskRows.Plugin (plugin) where
 
+import           Debug.Trace (trace)
+
 import           Control.Applicative ((<|>))
 import           Control.Monad (guard)
 -- import           Data.List (find)
 import           Data.Maybe (fromMaybe, mapMaybe)
 
-import           GHC.Core.Reduction (Reduction (Reduction))
+import           GHC.Core.Reduction (HetReduction (HetReduction), Reduction (Reduction), reductionReducedType)
 import qualified GHC.Rename.Names as Rename
+import           GHC.Core.FamInstEnv (FamInstEnvs, normaliseTcApp, topReduceTyFamApp_maybe)
 import           GHC.Tc.Types.Constraint (Ct)
 import qualified GHC.Tc.Types.Constraint as Ct
 import           GHC.Plugins (TyCon, (<+>), eqType, text)
@@ -32,7 +36,7 @@ import qualified GHC.Tc.Types as TcRnTypes
 import           GHC.Tc.Utils.TcType (TcKind, TcType)
 import qualified GHC.Tc.Utils.TcType as TcType
 import qualified GHC.Core.TyCon as TyCon
-import           GHC.Core.Unify (typesCantMatch)
+-- import           GHC.Core.Unify (typesCantMatch)
 import           GHC.Types.Unique.FM (unitUFM)
 
 -- | The @brisk-rows@ typechecker plugin
@@ -106,9 +110,9 @@ lookupTC modul s =
     TcPluginM.lookupOrig modul (GhcPlugins.mkTcOcc s) >>=
     TcPluginM.tcLookupTyCon
 
-lookupDC :: GhcPlugins.TyCon -> String -> TcPluginM.TcPluginM GhcPlugins.DataCon
-lookupDC tc s = case dcs of
-    [d] -> pure d
+lookupPDC :: GhcPlugins.TyCon -> String -> TcPluginM.TcPluginM GhcPlugins.TyCon
+lookupPDC tc s = case dcs of
+    [d] -> pure $ GhcPlugins.promoteDataCon d
     _ -> panicDoc "Plugin.BriskRows initialization could not find DataCon " (ppr s)
   where
     dcs =
@@ -123,6 +127,8 @@ lookupDC tc s = case dcs of
 data Env = Env {
     doTrace        :: GhcPlugins.SDoc -> TcPluginM ()
   ,
+    doTrace_       :: forall a. GhcPlugins.SDoc -> a -> a
+  ,
     envAssign      :: !TyCon
   ,
     envCmpName     :: !TyCon
@@ -136,6 +142,12 @@ data Env = Env {
     envExtOp       :: !TyCon
   ,
     envExtend      :: !TyCon
+  ,
+    envFamInstEnvs :: !FamInstEnvs
+  ,
+    envGT          :: !TyCon
+  ,
+    envLT          :: !TyCon
   ,
     envRestrict    :: !TyCon
   ,
@@ -152,21 +164,23 @@ data Env = Env {
 
 newEnv :: TcPluginM Env
 newEnv = do
-    doTrace <- pure (\_x -> (pure ())) `asTypeOf` do
-      dflags <- TcRnTypes.unsafeTcPluginTcM GhcPlugins.getDynFlags
-      pure $ \x -> do
-        TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
+    dflags <- TcRnTypes.unsafeTcPluginTcM GhcPlugins.getDynFlags
 
-    modul <- lookupModule "BriskRows.Internal"
-    let luTC = lookupTC modul
+    luTC <- lookupTC <$> lookupModule "BriskRows.Internal"
 
     envAssign <- do
       tc <- luTC "COL"
-      GhcPlugins.promoteDataCon <$> lookupDC tc ":="
+      lookupPDC tc ":="
 
     envCmpName <- luTC "CmpName"
 
-    envEQ <- luTC "CmpNameEQ"
+    (envEQ, envGT, envLT) <- do
+      tc <- lookupModule "GHC.Types" >>= flip lookupTC "Ordering"
+
+      eq <- lookupPDC tc "EQ"
+      gt <- lookupPDC tc "GT"
+      lt <- lookupPDC tc "LT"
+      pure (eq, gt, lt)
 
     envEmp <- luTC "Emp"
 
@@ -174,11 +188,13 @@ newEnv = do
     envExtOp  <- luTC ":&"
     envExtend <- luTC "Extend_Row#"
 
+    envFamInstEnvs <- TcPluginM.getFamInstEnvs
+
     envRestrict <- luTC "Restrict"
 
     envRow <- do
       tc <- luTC "ROW"
-      GhcPlugins.promoteDataCon <$> lookupDC tc "Row#"
+      lookupPDC tc "Row#"
   
     envSelect <- luTC "Select"
 
@@ -189,7 +205,11 @@ newEnv = do
     envUnfoldExt   <- luTC "UnfoldExt"
     envUnfoldExtOp <- luTC "UnfoldExtOp"
 
-    pure Env{..}
+    pure Env{
+              doTrace  = \x -> TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
+            , doTrace_ = \x -> trace (showSDoc dflags x)
+            , ..
+            }
 
 isRow :: Env -> TcType -> Bool
 isRow Env{envRow} ty = case TcType.tcSplitTyConApp_maybe ty of
@@ -229,7 +249,7 @@ rewriteCmpName env _rwenv _gs args = case args of
 rewriteExtOp :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
 rewriteExtOp env _rwenv _gs args = case args of
   [_k, _v, rho, _col]
-    | Just (tc', _) <- TcType.tcSplitTyConApp_maybe rho
+    | Just tc' <- TcType.tcTyConAppTyCon_maybe rho
     , (tc' == envEmp || tc' == envRow)
     -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
 
@@ -248,7 +268,7 @@ rewriteExtOp env _rwenv _gs args = case args of
 rewriteExt :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
 rewriteExt env _rwenv _gs args = case args of
   [_k, _v, _nm, _a, rho]
-    | Just (tc', _) <- TcType.tcSplitTyConApp_maybe rho
+    | Just tc' <- TcType.tcTyConAppTyCon_maybe rho
     , (tc' == envEmp || tc' == envRow)
     -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
 
@@ -351,6 +371,39 @@ getExistingEq env ct = case ct of
 
 -----
 
+equal :: Env -> TcType -> TcType -> Bool
+equal env x y = Just EQ == cmp env x y
+
+apart :: Env -> TcType -> TcType -> Bool
+apart env x y = maybe False (/= EQ) $ cmp env x y
+
+cmp :: Env -> TcType -> TcType -> Maybe Ordering
+cmp env =
+    \x y -> go $ reductionReducedType $ normaliseTcApp envFamInstEnvs TyCon.Nominal envCmpName [TcType.tcTypeKind x, x, y]
+  where
+    Env {envCmpName, envEQ, envFamInstEnvs, envGT, envLT} = env
+
+    go ty = case TcType.tcSplitTyConApp_maybe ty of
+        Nothing         -> Nothing
+        Just (tc, args)
+          | tc == envLT -> Just LT
+          | tc == envEQ -> Just EQ
+          | tc == envGT -> Just GT
+
+          | Just (sigma, body, oversat) <- TyCon.expandSynTyCon_maybe tc args
+          -> go $ TcType.substTy (TcType.mkTvSubstPrs sigma) body `TcType.mkAppTys` oversat
+
+          | Just (HetReduction redn _co) <- topReduceTyFamApp_maybe envFamInstEnvs tc args
+          -> go $ reductionReducedType redn
+
+          | tc == envCmpName
+          , [_k, x, y] <- args
+          , eqType x y -> Just EQ
+
+          | otherwise   -> Nothing
+
+-----
+
 -- | The domain-specific knowledge
 --
 -- This plugin does not implement any interactions, so we simplify each constraint individually.
@@ -410,7 +463,7 @@ goExtExt env existingEqs old lext rext
   | not $ lk `eqType` rk && lv `eqType` rv = Nothing
 
   | otherwise =
-        (NewCtRecipe old NothingEvTerm <$> goOuterInjectivity lext rext)
+        (NewCtRecipe old NothingEvTerm <$> goOuterInjectivity env lext rext)
     <|>
         (       (\(co, eqs) -> NewCtRecipe old (JustEvTerm (TcEvidence.evCoercion co)) eqs)
             <$> (isRearranged env lext rext <|> goUnfold existingEqs lext rext)
@@ -421,15 +474,15 @@ goExtExt env existingEqs old lext rext
 
 -- | This simple treatment of just one layer suffices for the general
 -- definitions in "BriskRows.Internal.RV" etc.
-goOuterInjectivity :: Extension -> Extension -> Maybe [NewEquality]
-goOuterInjectivity lext rext
+goOuterInjectivity :: Env -> Extension -> Extension -> Maybe [NewEquality]
+goOuterInjectivity env lext rext
     -- if the outermost names are equal, require the images and (recursively) extended rows are too
-  | lnm `eqType` rnm   = Just [NewEquality la ra, NewEquality lrho rrho]
+  | equal env lnm rnm   = Just [NewEquality la ra, NewEquality lrho rrho]
 
     -- This is commented out because 'isRearranged' supplants this rule.
 {-
     -- if the extended rows are equal, require the outermost names and images are too
-  | lrho `eqType` rrho = Just [NewEquality la ra, NewEquality lnm  rnm ]
+  | equal env lrho rrho = Just [NewEquality la ra, NewEquality lnm  rnm ]
 -}
 
   | otherwise = Nothing
@@ -492,18 +545,21 @@ peel env ext =
 
     cons x (Extends xs) = Extends (x : xs)
 
-pop :: TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
-pop needle misses = \case
+pop :: Env -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
+pop env needle misses = \case
     Extends []               -> Nothing
     Extends (assoc : assocs)
         -- TODO zonk them?
-      | eqType needle (fst assoc) -> do guard (all (apart . fst) misses); Just (snd assoc, Extends assocs)
-      | apart         (fst assoc) -> fmap (cons assoc) <$> pop needle misses (Extends assocs)
-      | otherwise                 -> Nothing
+      | eq  (fst assoc) -> do guard (all (apt . fst) misses); Just (snd assoc, Extends assocs)
+      | apt (fst assoc) -> fmap (cons assoc) <$> pop env needle misses (Extends assocs)
+      | otherwise       -> Nothing
   where
     cons x (Extends xs) = Extends (x : xs)
 
-    apart nm = typesCantMatch [(needle, nm)]
+    eq  = equal env needle
+    apt = apart env needle
+
+-----
 
 -- | Implied smaller equalities and a root-to-root coercion for two equated
 -- extensions whose columns names are either merely rearranged or else only one
@@ -518,6 +574,8 @@ isRearranged :: Env -> Extension -> Extension -> Maybe (TcEvidence.TcCoercion, [
 isRearranged env lext rext =
     (,) co <$> goAssocs [] [] lassocs0 rassocs0
   where
+    eq = equal env
+
     -- We're solving the equality using this coercion, but we're also adding
     -- new Wanted equalities that ensure this equality will /eventually zonk/
     -- to a mere rearrangement.
@@ -536,7 +594,7 @@ isRearranged env lext rext =
     goAssocs acc miss lassocs rassocs = case lassocs of
         Extends []                     -> goDone acc miss rassocs
         Extends ((lnm, la) : lassocs') ->
-         case pop lnm miss rassocs of
+         case pop env lnm miss rassocs of
              Just (ra, rassocs') -> goAssocs (NewEquality la ra : acc)              miss  (Extends lassocs') rassocs'
              Nothing             -> goAssocs acc                       ((lnm, la) : miss) (Extends lassocs') rassocs
 
@@ -550,10 +608,10 @@ isRearranged env lext rext =
         (_:_, [] ) -> Nothing   -- currently ragged
 
         ((lnm0, la0) : misses, (rnm0, ra0) : leftovers)
-          | not $ eqType lroot rroot          -> Nothing
-          | all (eqType lnm0 . fst) misses    -> goUni False acc lnm0 (reverse $ la0 : map snd misses   ) (          (rnm0, ra0) : leftovers)
-          | all (eqType rnm0 . fst) leftovers -> goUni True  acc rnm0 (          ra0 : map snd leftovers) (reverse $ (lnm0, la0) : misses   )
-          | otherwise                         -> Nothing
+          | not $ eqType lroot rroot      -> Nothing
+          | all (eq lnm0 . fst) misses    -> goUni False acc lnm0 (reverse $ la0 : map snd misses   ) (          (rnm0, ra0) : leftovers)
+          | all (eq rnm0 . fst) leftovers -> goUni True  acc rnm0 (          ra0 : map snd leftovers) (reverse $ (lnm0, la0) : misses   )
+          | otherwise                     -> Nothing
 
     -- The roots are identical and one side has identical names.
     --

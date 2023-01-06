@@ -117,8 +117,6 @@ data COL k v = k := v
 -- 'EQ'.
 type family CmpName (l :: k) (r :: k) :: Ordering
 
-type CmpNameEQ = EQ :: Ordering   -- for convenience of the plugin
-
 -- | The kind of a row type
 data ROW k v =
     -- | INVARIANT Non-descending, according to 'CmpName'
@@ -224,7 +222,7 @@ instance (ShowName a, ShowNameList as) => ShowNameList (a ': as)   where docName
 type instance CmpName @(NonEmpty k) (l :| ls) (r :| rs) = CmpName l r `Lexico` CmpName ls rs
 instance (ShowName a, ShowName as) => ShowName (a :| as) where docName _prx = PP.docBop " :| " PP.RightAssoc 5 (docName (Proxy @a)) (docName (Proxy @as))
 
-type instance CmpName @() l r = CmpNameEQ   -- just to suppress unused binding warning
+type instance CmpName @() l r = EQ
 instance ShowName ('() :: ()) where docName _prx = PP.docString "'()"
 
 type instance CmpName @(Proxy k) l r = EQ
