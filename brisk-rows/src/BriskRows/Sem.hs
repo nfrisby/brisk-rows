@@ -14,7 +14,7 @@
 -- This is an alternative to "BriskRows.Fields". The principal difference is
 -- that the 'Sem' family prevents the field structure from being preserved in
 -- the values themselves.
-module BriskRows.Internal.Sem (
+module BriskRows.Sem (
     -- * Structure
     Fld (Con, App, Nam, Img),
     Sem,

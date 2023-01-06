@@ -20,7 +20,7 @@ module BriskRows.RVtf (
     Name (Name),
     col,
     lacking, lacking#, lackingP,
-    module BriskRows.Internal.Sem,
+    module BriskRows.Sem,
     ) where
 
 import           BriskRows
@@ -28,4 +28,4 @@ import           BriskRows.Internal.RVtf
 import           BriskRows.Internal.RVtf.Ambiguous
 import           BriskRows.Internal.RVtf.Operators
 import           BriskRows.Internal.RVtf.Proxy
-import           BriskRows.Internal.Sem
+import           BriskRows.Sem

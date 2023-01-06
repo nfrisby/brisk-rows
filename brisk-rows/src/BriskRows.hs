@@ -3,15 +3,15 @@ module BriskRows (
     -- * Rows
     -- ** Kinds
     COL ((:=)),
-    ROW,
+    ROW (Emp),
     -- ** Constructors
-    Emp,
-    Ext, (:&),
+    (:&),
     -- ** Queries
     Find,
     FindResult (Found, NoSuchColumn),
     Select,
     -- ** Constraints
+    AllCols,
     Absent,
     KnownLT,
     KnownLen,

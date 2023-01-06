@@ -17,11 +17,13 @@ library
                        BriskRows
                        BriskRows.Internal
                        BriskRows.Internal.PP
+                       BriskRows.Sem
                        BriskRows.Plugin
 
   default-language:    Haskell2010
 
   build-depends:       base
+                     , containers
                      , ghc >= 9
                      , ghc-prim
 

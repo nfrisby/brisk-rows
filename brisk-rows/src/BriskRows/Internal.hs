@@ -9,6 +9,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
@@ -22,16 +23,16 @@ module BriskRows.Internal (
     -- * Rows
     -- ** Kinds
     COL ((:=)),
-    ROW (Row#),
+    ROW (Emp),
     -- ** Constructors
-    Emp,
-    Ext, (:&),
+    (:&),
     -- ** Queries
     Find,
     FindResult (Found, NoSuchColumn),
     Select,
     -- ** Constraints
     Absent,
+    AllCols (anyDicts#),
     KnownLT (knownLT#),
     KnownLen (knownLen#),
     Lacks,
@@ -43,24 +44,39 @@ module BriskRows.Internal (
     -- * Auxiliary
     Extend_Col,
     Err,
+    AllColsHelp,
     NoErr,
     TypeErr,
-    UnfoldExt,
     UnfoldExtOp,
+    extAllCols,
+    extKnownLT,
+    -- * blarg
+    AbstractROW,
+    AbstractCOL,
+    Extend_Row#,
+    Restrict,
+    Cons,
+    NotAbsent,
+    NotFound,
+    Incomparable,
     ) where
 
-import           Data.Kind (Type)
+import           Data.Kind (Constraint, Type)
 import           Data.List.NonEmpty (NonEmpty ((:|)))
 import           Data.Proxy (Proxy (Proxy))
+import qualified Data.Sequence as Seq
 import qualified Data.Type.Ord
-import           GHC.Exts (Proxy#, proxy#)
+import           GHC.Exts (Any, Proxy#, proxy#)
 import           GHC.Prim (Int#, (+#))
 import           GHC.Tuple (Solo (Solo))
+import           GHC.Types (Int (I#))
 import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType), TypeError)
 import           GHC.TypeLits (Natural, Symbol)
 import qualified GHC.TypeLits as TypeLits
+import           Unsafe.Coerce (unsafeCoerce)
 
 import qualified BriskRows.Internal.PP as PP
+import qualified BriskRows.Sem as Sem
 
 -----
 
@@ -118,15 +134,16 @@ data COL k v = k := v
 type family CmpName (l :: k) (r :: k) :: Ordering
 
 -- | The kind of a row type
-data ROW k v =
+data ROW (k :: Type) (v :: Type) =
+  -- | The empty row
+  Emp
+{-
     -- | INVARIANT Non-descending, according to 'CmpName'
     --
     -- Of multiple columns with the same name, the outermost is the most
     -- recently added. See 'Lacks'.
     Row# [COL k v]
-
--- | The empty row
-type Emp = Row# '[] :: ROW k v
+-}
 
 type family Cons
     (  nm :: k       )
@@ -134,7 +151,8 @@ type family Cons
     ( rho :: ROW k v )
           :: ROW k v
   where
-    Cons nm a (Row# cols) = Row# (nm := a ': cols)
+    {}
+--    Cons nm a (Row# cols) = Row# (nm := a ': cols)
 
 class ShowName (nm :: k) where
     docName :: proxy nm -> PP.Doc
@@ -280,20 +298,28 @@ class KnownLT (nm :: k) (rho :: ROW k v)
     -- | The number of lesser columns in the row, according to 'CmpName'
     knownLT# :: Proxy# nm -> Proxy# rho -> Int#
 
-instance KnownLT nm (Row# '[])
+extKnownLT ::
+  forall k v (nm :: k) (rho' :: ROW k v) (rho :: ROW k v).
+     Int#
+  -> (Proxy# nm -> Proxy# rho' -> Int#)
+  -> (Proxy# nm -> Proxy# rho -> Int#)
+extKnownLT i# f = \nm _rho -> f nm proxy# +# i#
+
+instance KnownLT nm Emp
   where
     knownLT# = \_nm _rho -> 0#
 
+{-
 instance
     KnownLT_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm cols
  => KnownLT nm (Row# (x := b ': cols))
   where
     knownLT# = \nm _rho ->
         knownLT_Ordering
-          (proxy# :: Proxy# (TypeErr (Incomparable nm x)))
-          (proxy# :: Proxy# (CmpName nm x))
+          (proxy# @(TypeErr (Incomparable nm x)))
+          (proxy# @(CmpName nm x))
           nm
-          (proxy# :: Proxy# cols)
+          (proxy# @cols)
 
 class
     KnownLT_Ordering
@@ -316,7 +342,8 @@ instance
     KnownLT nm (Row# cols)
  => KnownLT_Ordering err GT nm cols
   where
-    knownLT_Ordering = \_err _o nm _cols -> 1# +# knownLT# nm (proxy# :: Proxy# (Row# cols))
+    knownLT_Ordering = \_err _o nm _cols -> 1# +# knownLT# nm (proxy# @(Row# cols))
+-}
 
 -- | More data enabling methods on records, variants, etc
 --
@@ -326,16 +353,16 @@ class KnownLen (rho :: ROW k v)
     -- | The number of columns in the row
     knownLen# :: Proxy# rho -> Int#
 
-instance KnownLen (Row# '[])
+instance KnownLen Emp
   where
     knownLen# = \_rho -> 0#
-
+{-
 instance
     KnownLen (Row# cols)
  => KnownLen (Row# (x := b ': cols))
   where
-    knownLen# = \_rho -> 1# +# knownLen# (proxy# :: Proxy# (Row# cols))
-
+    knownLen# = \_rho -> 1# +# knownLen# (proxy# @(Row# cols))
+-}
 -----
 
 -- | The traditional row polymorphism constraint
@@ -355,8 +382,9 @@ type Lacks nm rho = (Absent nm rho, KnownLT nm rho)
 -- See 'Lacks'.
 class Absent (nm :: k) (rho :: ROW k v)
 
-instance Absent nm (Row# '[])
+instance Absent nm Emp
 
+{-
 instance
     Absent_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm cols
  => Absent nm (Row# (x := b ': cols))
@@ -368,12 +396,13 @@ instance Absent_Ordering err LT nm cols
 instance TypeError (NotAbsent nm) => Absent_Ordering err EQ nm cols
 
 instance Absent nm (Row# cols) => Absent_Ordering err GT nm cols
-
+-}
 -----
 
 type family Extend_Col (err :: Err) (col :: COL k v) (rho :: ROW k v) :: ROW k v
   where
-    Extend_Col err (nm := a) rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
+    {}
+--    Extend_Col err (nm := a) rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 -- We intentionally put the @err@ argument after the @rho@ argument, so that GHC renders the deeper error
 type family Extend_Row#
@@ -383,7 +412,8 @@ type family Extend_Row#
     ( err :: Err     )
           :: ROW k v
   where
-    Extend_Row# nm a (Row# '[]             ) err = Row# '[nm := a]
+    {}
+{-    Extend_Row# nm a (Row# '[]             ) err = Row# '[nm := a]
     Extend_Row# nm a (Row# (x := b ': cols)) err = Extend_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm a x b cols
 
 type family Extend_Ordering
@@ -399,16 +429,17 @@ type family Extend_Ordering
     Extend_Ordering err LT nm a x b cols = Cons nm a (Cons x b (Row# cols))
     Extend_Ordering err EQ nm a x b cols = Cons nm a (Cons x b (Row# cols))
     Extend_Ordering err GT nm a x b cols = Cons x b (Extend_Row# nm a (Row# cols) NoErr)
-
+-}
 -----
 
 -- | Restriction is essentially an implementation detail of the typechecker
 -- plugin, not exposed to the user
 type family Restrict (nm :: k) (rho :: ROW k v) :: ROW k v
   where
-    Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
-    Restrict nm (Row# (x := b ': cols)) = Restrict_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
-
+    {}
+--    Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
+--    Restrict nm (Row# (x := b ': cols)) = Restrict_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
+{-
 type family Restrict_Ordering
     (  err :: Err       )
     (    o :: Ordering  )
@@ -421,7 +452,7 @@ type family Restrict_Ordering
     Restrict_Ordering err LT nm x b cols = TypeError (NotFound nm)
     Restrict_Ordering err EQ nm x b cols = Row# cols
     Restrict_Ordering err GT nm x b cols = Cons x b (Restrict nm (Row# cols))
-
+-}
 -----
 
 -- | The image of this name in the row
@@ -431,6 +462,8 @@ type family Restrict_Ordering
 -- TODO does this encourage subtle bugs? Only use 'Find' instead?
 type family Select (nm :: k) (rho :: ROW k v) :: v
   where
+    {}
+{-
     Select nm (Row# '[]             ) = TypeError (NotFound nm)
     Select nm (Row# (x := b ': cols)) = Select_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
 
@@ -446,7 +479,7 @@ type family Select_Ordering
     Select_Ordering err LT nm x b cols = TypeError (NotFound nm)
     Select_Ordering err EQ nm x b cols = b
     Select_Ordering err GT nm x b cols = Select nm (Row# cols)
-
+-}
 -----
 
 data FindResult k v = Found v | NoSuchColumn k
@@ -456,6 +489,8 @@ data FindResult k v = Found v | NoSuchColumn k
 -- If multiple columns have the same name, it returns the outermost.
 type family Find (nm :: k) (rho :: ROW k v) :: FindResult k v
   where
+    {}
+{-
     Find nm (Row# '[]             ) = NoSuchColumn nm
     Find nm (Row# (x := b ': cols)) = Find_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
 
@@ -471,19 +506,35 @@ type family Find_Ordering
     Find_Ordering err LT nm x b cols = NoSuchColumn nm
     Find_Ordering err EQ nm x b cols = Found b
     Find_Ordering err GT nm x b cols = Find nm (Row# cols)
-
+-}
 -----
-
--- | Extend the row by inserting the given column
---
--- See ':&'.
-type family Ext (nm :: k) (a :: v) (rho :: ROW k v) :: ROW k v where {}
-type UnfoldExt   nm        a        rho              = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
 
 infixl 5 :&
 
--- | Operator alias of 'Ext'
---
--- This let's you write @rho ':&' nm ':=' a@ instead of @'Ext' nm a rho@.
+-- | Extend the row by inserting the given column
 type family (:&) (rho :: ROW k v) (col :: COL k v) :: ROW k v where {}
-type UnfoldExtOp rho               col              = Extend_Col (TypeErr (AbstractCOL col)) col rho
+type UnfoldExtOp rho               col              = rho :& col -- Extend_Col (TypeErr (AbstractCOL col)) col rho
+
+-----
+
+class AllCols (c :: Sem.Fld k v Constraint) (rho :: ROW k v)
+  where
+    anyDicts# :: Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any))
+
+class    (KnownLT nm rho, Sem.Sem c nm a) => AllColsHelp (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v)
+instance (KnownLT nm rho, Sem.Sem c nm a) => AllColsHelp (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v)
+
+instance AllCols c Emp where anyDicts# = \_c _emp -> Seq.empty
+
+extAllCols ::
+  forall k v (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v).
+     AllColsHelp c nm a rho
+  => Proxy# nm
+  -> Proxy# a
+  -> (Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+  -> (Proxy# c -> Proxy# (rho :& nm := a)-> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+extAllCols nm _a inner c _rho' =
+    Seq.insertAt
+      (I# (knownLT# nm (proxy# @rho)))
+      (unsafeCoerce $ Sem.Dict @(Sem.Sem c nm a))
+      (inner c proxy#)

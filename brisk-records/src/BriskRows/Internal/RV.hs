@@ -45,6 +45,7 @@ import qualified BriskRows.Fields as Fields
 import           BriskRows.Internal
 import qualified BriskRows.Internal.RVf as RVf
 import qualified BriskRows.Internal.RVtf as RVtf
+import qualified BriskRows.Sem as Sem
 
 -----
 
@@ -104,8 +105,8 @@ class    Monoid v => ImgIsMonoid k v
 instance Monoid v => ImgIsMonoid k v
 
 -- | Every image in the row is an instance of 'Monoid'
-class    RVf.AllCols ImgIsMonoid rho         => AllMonoid (rho :: ROW k Type)
-instance RVf.AllCols ImgIsMonoid (Row# cols) => AllMonoid (Row# cols)
+class    (AllCols (Sem.Con Sem.CTop) rho, RVf.AllCols ImgIsMonoid rho) => AllMonoid (rho :: ROW k Type)
+instance (AllCols (Sem.Con Sem.CTop) rho, RVf.AllCols ImgIsMonoid rho) => AllMonoid  rho
 
 -- | Use 'mempty' for each field
 pur :: forall {rho}. AllMonoid rho => Rcd rho
@@ -120,8 +121,8 @@ class    Semigroup v => ImgIsSemigroup k v
 instance Semigroup v => ImgIsSemigroup k v
 
 -- | Every image in the row is an instance of 'Semigroup'
-class    RVf.AllCols ImgIsSemigroup rho         => AllSemigroup (rho :: ROW k Type)
-instance RVf.AllCols ImgIsSemigroup (Row# cols) => AllSemigroup (Row# cols)
+class    (AllCols (Sem.Con Sem.CTop) rho, RVf.AllCols ImgIsSemigroup rho) => AllSemigroup (rho :: ROW k Type)
+instance (AllCols (Sem.Con Sem.CTop) rho, RVf.AllCols ImgIsSemigroup rho) => AllSemigroup  rho
 
 -- | Combine one 'Rcd' or 'Vrt' with another, via '<>'
 splat ::
@@ -145,7 +146,7 @@ type family SplatF (l :: ROW k Type -> Type) (r :: ROW k Type -> Type) (rho :: R
 
 class Splat (err :: Err) (l :: ROW k Type -> Type) (r :: ROW k Type -> Type)
   where
-    splat# :: RVf.AllCols ImgIsSemigroup rho => Proxy# err -> l rho -> r rho -> SplatF l r rho
+    splat# :: (AllCols (Sem.Con Sem.CTop) rho, RVf.AllCols ImgIsSemigroup rho) => Proxy# err -> l rho -> r rho -> SplatF l r rho
 
 combo :: (Fields.D ImgIsSemigroup Fields.:->: Fields.I Fields.:->: Fields.I Fields.:->: Fields.I) k v
 combo = Fields.A $ \Fields.D -> Fields.A $ \(Fields.I l') -> Fields.A $ \(Fields.I r') -> Fields.I $ l' <> r'

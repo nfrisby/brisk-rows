@@ -61,7 +61,7 @@ import           Unsafe.Coerce (unsafeCoerce)
 
 import qualified BriskRows.Idx as Idx
 import           BriskRows.Internal
-import           BriskRows.Internal.Sem
+import           BriskRows.Sem
 
 -----
 
@@ -105,6 +105,7 @@ prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
 
 -----
 
+{-
 class KnownLen rho => AllCols (c :: Fld k v Constraint) (rho :: ROW k v)
   where
     dicts# :: Proxy# c -> Rcd (Con Dict `App` c) rho
@@ -115,9 +116,21 @@ instance (Sem c nm a, AllCols c (Row# cols)) => AllCols c (Row# (nm := a ': cols
   dicts# = \_c ->
       let Rcd# sq = dicts# proxy# :: Rcd (Con Dict `App` c) (Row# cols)
       in Rcd# $ unsafeCoerce (Dict :: Dict (Sem c nm a)) Sq.<| sq
+-}
 
-pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. Sem fld nm a) -> Rcd fld rho
-pur# = \_fld f -> Rcd# $ Sq.replicate (I# (knownLen# (proxy# @rho))) (f @Any @Any)
+dicts# :: forall k v (c :: Fld k v Constraint) {rho :: ROW k v}.
+     AllCols c rho
+  => Proxy# c
+  -> Rcd (Con Dict `App` c) rho
+dicts# c = Rcd# $ anyDicts# c (proxy# @rho)
+
+pur# :: forall fld {rho}. AllCols (Con CTop) rho => Proxy# fld -> (forall nm a. Proxy# nm -> Proxy# a -> Sem fld nm a) -> Rcd fld rho
+pur# = \fld f ->
+    natro#
+        (proxy# @(Con Dict `App` Con CTop))
+        fld
+        (\nm a _dict -> f nm a)
+        (dicts# (proxy# @(Con CTop)))
 
 -----
 
@@ -174,9 +187,10 @@ prjAt idx rcd =
     unsafeCoerce $ Sq.index sq i
 
 -- | Each field has type @'Idx.Idx' nm a rho@
-idxs :: KnownLen rho => Rcd (Con Idx.Idx `App` Nam `App` Img `App` Con rho) rho
+idxs :: forall {rho}. AllCols (Con CTop) rho => Rcd (Con Idx.Idx `App` Nam `App` Img `App` Con rho) rho
 idxs =
-    let rcd = Rcd# $ Sq.fromFunction (I# (knownLen# (row# rcd))) Idx.Idx
+    let len = Sq.length $ anyDicts# (proxy# @(Con CTop)) (proxy# @rho)
+        rcd = Rcd# $ Sq.fromFunction len Idx.Idx
     in
     rcd
 

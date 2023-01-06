@@ -18,7 +18,7 @@
 
 module BriskRows.Internal.RVf (
     -- * Records
-    AllCols,
+    BriskRows.Internal.RVf.AllCols,
     dicts#,
     Rcd (Rcd),
     del#,
@@ -47,7 +47,7 @@ import           GHC.Exts (Proxy#, proxy#)
 import           BriskRows.Fields
 import           BriskRows.Internal
 import qualified BriskRows.Internal.RVtf as RVtf
-import qualified BriskRows.Internal.Sem as Sem
+import qualified BriskRows.Sem as Sem
 
 -----
 
@@ -111,8 +111,8 @@ lacking# = RVtf.lacking#
 
 -----
 
-pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. fld nm a) -> Rcd fld rho
-pur# = \_fld f -> Rcd $ RVtf.pur# (proxy# @(Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img)) f
+pur# :: forall fld {rho}. RVtf.AllCols (Sem.Con Sem.CTop) rho => Proxy# fld -> (forall nm a. fld nm a) -> Rcd fld rho
+pur# = \_fld f -> Rcd $ RVtf.pur# (proxy# @(Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img)) (\_nm _a -> f)
 
 -----
 
@@ -144,10 +144,10 @@ instance Splat err Vrt Vrt where splat# = \err (Vrt l) (Vrt r) -> fmap Vrt $ RVt
 
 -----
 
-class    RVtf.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho         => AllCols (c :: k -> v -> Constraint) (rho :: ROW k v)
-instance RVtf.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) (Row# cols) => AllCols c                           (Row# cols)
+class    BriskRows.Internal.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho => AllCols                       (c :: k -> v -> Constraint) (rho :: ROW k v)
+instance BriskRows.Internal.AllCols (Sem.Con c `Sem.App` Sem.Nam `Sem.App` Sem.Img) rho => BriskRows.Internal.RVf.AllCols c                           rho
 
-dicts# :: forall {c} {rho}. AllCols c rho => Proxy# c -> Rcd (D c) rho
+dicts# :: forall {c} {rho}. BriskRows.Internal.RVf.AllCols c rho => Proxy# c -> Rcd (D c) rho
 dicts# _prx =
     Rcd
   $ RVtf.natro# proxy# proxy# (\_nm _a Sem.Dict -> D)

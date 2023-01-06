@@ -24,7 +24,7 @@ import           BriskRows.Internal
 import           BriskRows.Internal.RV.Operators (Name (Name), col)
 import           BriskRows.Internal.RVtf
 import           BriskRows.Internal.RVtf.Proxy
-import           BriskRows.Internal.Sem
+import           BriskRows.Sem
 
 -----
 

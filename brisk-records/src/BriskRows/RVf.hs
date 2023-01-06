@@ -10,7 +10,7 @@ module BriskRows.RVf (
     -- * Records
     Rcd,
     -- ** Constructors
-    AllCols,
+    BriskRows.Internal.RVf.AllCols,
     dicts#,
     emp,
     pur#,
@@ -39,7 +39,7 @@ module BriskRows.RVf (
     splat,
     ) where
 
-import           BriskRows
+import           BriskRows hiding (AllCols)
 import           BriskRows.Fields
 import           BriskRows.Internal.RVf
 import           BriskRows.Internal.RVf.Ambiguous

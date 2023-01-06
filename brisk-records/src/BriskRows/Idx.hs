@@ -45,7 +45,7 @@ data EqualsKV :: k -> v -> k -> v -> Type where
 
 -- | An offset of @nm := a@ within the row
 newtype Idx (nm :: k) (a :: v) (rho :: ROW k v) = Idx Int
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Show)
 
 idxInt :: Idx nm a rho -> Int
 idxInt (Idx i) = i

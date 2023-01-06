@@ -26,7 +26,7 @@ import           GHC.Exts (Proxy#, proxy#)
 
 import           BriskRows.Internal
 import           BriskRows.Internal.RVtf
-import           BriskRows.Internal.Sem
+import           BriskRows.Sem
 
 -----
 
