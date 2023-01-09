@@ -44,12 +44,16 @@ module BriskRows.Internal (
     -- * Auxiliary
     Extend_Col,
     Err,
-    AllColsHelp,
     NoErr,
     TypeErr,
     UnfoldExtOp,
-    extAllCols,
-    extKnownLT,
+    castAllCols,
+    givenAllCols1,
+    givenAllCols2,
+    givenKnownLT,
+    uncastAllCols,
+    wantedKnownLT,
+    wantedAllCols,
     -- * blarg
     AbstractROW,
     AbstractCOL,
@@ -67,7 +71,7 @@ import           Data.Proxy (Proxy (Proxy))
 import qualified Data.Sequence as Seq
 import qualified Data.Type.Ord
 import           GHC.Exts (Any, Proxy#, proxy#)
-import           GHC.Prim (Int#, (+#))
+import           GHC.Prim (Int#, (+#), (-#))
 import           GHC.Tuple (Solo (Solo))
 import           GHC.Types (Int (I#))
 import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType), TypeError)
@@ -298,12 +302,19 @@ class KnownLT (nm :: k) (rho :: ROW k v)
     -- | The number of lesser columns in the row, according to 'CmpName'
     knownLT# :: Proxy# nm -> Proxy# rho -> Int#
 
-extKnownLT ::
+givenKnownLT ::
+  forall k v (nm :: k) (rho :: ROW k v) (rho' :: ROW k v).
+     Int#
+  -> (Proxy# nm -> Proxy# rho -> Int#)
+  -> (Proxy# nm -> Proxy# rho' -> Int#)
+givenKnownLT i# older = \nm _rho -> older nm proxy# -# i#
+
+wantedKnownLT ::
   forall k v (nm :: k) (rho' :: ROW k v) (rho :: ROW k v).
      Int#
   -> (Proxy# nm -> Proxy# rho' -> Int#)
   -> (Proxy# nm -> Proxy# rho -> Int#)
-extKnownLT i# f = \nm _rho -> f nm proxy# +# i#
+wantedKnownLT i# newer = \nm _rho -> newer nm proxy# +# i#
 
 instance KnownLT nm Emp
   where
@@ -521,20 +532,77 @@ class AllCols (c :: Sem.Fld k v Constraint) (rho :: ROW k v)
   where
     anyDicts# :: Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any))
 
-class    (KnownLT nm rho, Sem.Sem c nm a) => AllColsHelp (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v)
-instance (KnownLT nm rho, Sem.Sem c nm a) => AllColsHelp (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v)
-
 instance AllCols c Emp where anyDicts# = \_c _emp -> Seq.empty
 
-extAllCols ::
-  forall k v (c :: Sem.Fld k v Constraint) (nm :: k) (a :: v) (rho :: ROW k v).
-     AllColsHelp c nm a rho
+uncastAllCols ::
+  forall {k} {v} {c :: Sem.Fld k v Constraint} {rho :: ROW k v}.
+     (Proxy# c               -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+  -> (Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+uncastAllCols inner c _rho = inner c
+
+castAllCols ::
+  forall {k} {v} {c :: Sem.Fld k v Constraint} {rho :: ROW k v}.
+     AllCols c rho
+  => Proxy# rho
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+castAllCols _rho c = anyDicts# c (proxy# @rho)
+
+{-
+
+w :: AllCols c (rho :& x := a :& y := b)
+w = Seq.insertAt i w'1 w'2
+
+w'1 :: c x a
+w'2 :: AllCols c (rho :& y := b)
+
+-}
+wantedAllCols ::
+  forall {k} {v} {c :: Sem.Fld k v Constraint} {nm :: k} {a :: v}.
+     Sem.Sem c nm a
   => Proxy# nm
   -> Proxy# a
-  -> (Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
-  -> (Proxy# c -> Proxy# (rho :& nm := a)-> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
-extAllCols nm _a inner c _rho' =
+  -> Int#
+  -> Int#
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+wantedAllCols _nm _a i# j# newer c =
     Seq.insertAt
-      (I# (knownLT# nm (proxy# @rho)))
-      (unsafeCoerce $ Sem.Dict @(Sem.Sem c nm a))
-      (inner c proxy#)
+        (I# (i# +# j#))
+        (unsafeCoerce (Sem.Dict @(Sem.Sem c nm a)))
+        (newer c)
+
+{-
+
+g :: AllCols c (rho :& x := a :& y := b)
+
+g'1 :: c x a
+g'1 = Seq.at i g
+
+g'2 :: AllCols c (rho :& y := b)
+g'2 = Seq.deleteAt i g
+
+-}
+givenAllCols1 ::
+  forall {k} {v} {c :: Sem.Fld k v Constraint} {nm :: k} {a :: v}.
+     Proxy# nm
+  -> Proxy# a
+  -> Int#
+  -> Int#
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+  -> Sem.Dict (Sem.Sem c nm a)
+givenAllCols1 _nm _a i# j# older =
+    unsafeCoerce
+  $ Seq.index
+        (older (proxy# @c))
+        (I# (i# +# j#))
+
+givenAllCols2 ::
+  forall {k} {v} {c :: Sem.Fld k v Constraint}.
+     Int#
+  -> Int#
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+  -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+givenAllCols2 i# j# older c =
+    Seq.deleteAt
+        (I# (i# +# j#))
+        (older c)
