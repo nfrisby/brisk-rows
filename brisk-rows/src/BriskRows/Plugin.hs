@@ -23,6 +23,7 @@ import           GHC.Types.Id.Make (proxyHashId)
 import           GHC.Core.Class (Class, classTyCon)
 import           GHC.Platform (Platform)
 import qualified GHC.Core as Core
+import           GHC.Core.Make (mkCoreApps)
 import           GHC.Core.Reduction (HetReduction (HetReduction), Reduction (Reduction), reductionReducedType)
 import qualified GHC.Rename.Names as Rename
 import           GHC.Core.FamInstEnv (FamInstEnvs, normaliseTcApp, topReduceTyFamApp_maybe)
@@ -129,10 +130,10 @@ indexGivens env =
           | Just (tc, [k, v, nm, rho]) <- TcType.tcSplitTyConApp_maybe (Ct.ctPred ct)
           , tc == classTyCon envKnownLT
           , Nothing <- getExtend env rho
-          , let ex   = Ct.ctEvExpr (Ct.ctEvidence ct)
-                         `GhcPlugins.mkCast` envKnownLTCo k v nm rho
-                         `Core.mkTyApps` [k, v, nm, rho]
-                         `Core.mkApps`   [ Core.mkTyApps (TcEvidence.evId proxyHashId) [TcType.tcTypeKind x, x] | x <- [nm, rho] ]
+          , let ex   =
+                                        Ct.ctEvExpr (Ct.ctEvidence ct)
+                    `GhcPlugins.mkCast` envKnownLTCo k v nm rho
+                    `mkCoreApps`        [ Core.mkTyApps (TcEvidence.evId proxyHashId) [TcType.tcTypeKind x, x] | x <- [nm, rho] ]
           , let acc' = Map.insertWith Map.union (NonDetTcType rho) (Map.singleton (NonDetTcType nm) ex) acc
           -> go acc' cts
 
@@ -636,7 +637,7 @@ newDict env evBindsVar = \case
                 let ty  = TcType.mkTyConApp (classTyCon envKnownLT) [k, v, x, rho']
                 TcPluginM.newGiven evBindsVar loc ty $
                      (`GhcPlugins.mkCast` GhcPlugins.mkSymCo (envKnownLTCo k v x rho'))
-                   $ (\older -> TcEvidence.evId envGivenKnownLT `Core.mkTyApps` [k, v, x, rho, rho'] `Core.mkApps` [Core.mkIntLit envPlatform (toInteger i), older])
+                   $ (\older -> TcEvidence.evId envGivenKnownLT `Core.mkTyApps` [k, v, x, rho, rho'] `mkCoreApps` [Core.mkIntLit envPlatform (toInteger i), older])
                    $ (`GhcPlugins.mkCast` envKnownLTCo k v x rho)
                    $ Ct.ctEvExpr (Ct.ctEvidence old)
 
@@ -653,7 +654,7 @@ newDict env evBindsVar = \case
 
             let ev =
                      (`GhcPlugins.mkCast` GhcPlugins.mkSymCo (envKnownLTCo k v x rho))
-                   $ (\newer -> TcEvidence.evId envWantedKnownLT `Core.mkTyApps` [k, v, x, rho', rho] `Core.mkApps` [Core.mkIntLit envPlatform (toInteger i), newer])
+                   $ (\newer -> TcEvidence.evId envWantedKnownLT `Core.mkTyApps` [k, v, x, rho', rho] `mkCoreApps` [Core.mkIntLit envPlatform (toInteger i), newer])
                    $ (`GhcPlugins.mkCast` envKnownLTCo k v x rho')
                    $ Ct.ctEvExpr new
 
@@ -672,8 +673,8 @@ newDict env evBindsVar = \case
                         let scrut =
                                                 TcEvidence.evId envGivenAllCols1
                                 `Core.mkTyApps` [k, v, c, nm, a]
-                                `Core.mkApps`   [ Core.mkTyApps (TcEvidence.evId proxyHashId) [knd, typ] | (knd, typ) <- [(k, nm), (v, a)] ]
-                                `Core.mkApps`   [Core.mkIntLit envPlatform (toInteger i), evex, older]
+                                `mkCoreApps`    [ Core.mkTyApps (TcEvidence.evId proxyHashId) [knd, typ] | (knd, typ) <- [(k, nm), (v, a)] ]
+                                `mkCoreApps`    [Core.mkIntLit envPlatform (toInteger i), evex, older]
                         -- retrieve the payload of the Dict
                         TcPluginM.newGiven evBindsVar loc ty $
                             Core.Case scrut case_bndr ty
@@ -686,7 +687,7 @@ newDict env evBindsVar = \case
                     pure $ (,) (new : news) $
                                         TcEvidence.evId envGivenAllCols2
                         `Core.mkTyApps` [k, v, c]
-                        `Core.mkApps`   [Core.mkIntLit envPlatform (toInteger i), evex, older]
+                        `mkCoreApps`    [Core.mkIntLit envPlatform (toInteger i), evex, older]
 
             -- This processes the outermost extract first. See Haddock of
             -- 'KnownLtInt' and 'NewAllColsRecipe' to confirm that and
@@ -718,9 +719,9 @@ newDict env evBindsVar = \case
                     pure $ (,) (new : news) $
                                         TcEvidence.evId envWantedAllCols
                         `Core.mkTyApps` [k, v, c, nm, a]
-                        `Core.mkApps`   [Ct.ctEvExpr new]
-                        `Core.mkApps`   [ Core.mkTyApps (TcEvidence.evId proxyHashId) [knd, typ] | (knd, typ) <- [(k, nm), (v, a)] ]
-                        `Core.mkApps`   [Core.mkIntLit envPlatform (toInteger i), evex, newer]
+                        `mkCoreApps`    [Ct.ctEvExpr new]
+                        `mkCoreApps`    [ Core.mkTyApps (TcEvidence.evId proxyHashId) [knd, typ] | (knd, typ) <- [(k, nm), (v, a)] ]
+                        `mkCoreApps`    [Core.mkIntLit envPlatform (toInteger i), evex, newer]
             new <- do
                 let loc = Ct.ctLoc old
                 let ty  = TcType.mkTyConApp (classTyCon envAllCols) [k, v, c, rho']
@@ -741,7 +742,7 @@ mkCastAllCols :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcEvidence.EvExp
 mkCastAllCols env k v c rho evex =
                     TcEvidence.evId envCastAllCols
     `Core.mkTyApps` [k, v, c, rho]
-    `Core.mkApps`   [evex, prx]
+    `mkCoreApps`    [evex, prx]
   where
     Env{envCastAllCols, envROW} = env
 
@@ -751,7 +752,7 @@ mkUncastAllCols :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcEvidence.EvE
 mkUncastAllCols env k v c rho evex =
                     TcEvidence.evId envUncastAllCols
     `Core.mkTyApps` [k, v, c, rho]
-    `Core.mkApps`   [evex]
+    `mkCoreApps`    [evex]
   where
     Env{envUncastAllCols} = env
 

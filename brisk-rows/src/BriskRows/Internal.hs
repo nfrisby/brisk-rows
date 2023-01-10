@@ -283,6 +283,7 @@ givenKnownLT ::
      Int#
   -> (Proxy# nm -> Proxy# rho -> Int#)
   -> (Proxy# nm -> Proxy# rho' -> Int#)
+{-# INLINE givenKnownLT #-}
 givenKnownLT i# older = \nm _rho -> older nm proxy# -# i#
 
 wantedKnownLT ::
@@ -290,6 +291,7 @@ wantedKnownLT ::
      Int#
   -> (Proxy# nm -> Proxy# rho' -> Int#)
   -> (Proxy# nm -> Proxy# rho -> Int#)
+{-# INLINE wantedKnownLT #-}
 wantedKnownLT i# newer = \nm _rho -> newer nm proxy# +# i#
 
 instance KnownLT nm Emp
@@ -350,6 +352,7 @@ uncastAllCols ::
   forall {k} {v} {c :: Sem.Fld k v Constraint} {rho :: ROW k v}.
      (Proxy# c               -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
   -> (Proxy# c -> Proxy# rho -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+{-# INLINE uncastAllCols #-}
 uncastAllCols inner c _rho = inner c
 
 castAllCols ::
@@ -357,6 +360,7 @@ castAllCols ::
      AllCols c rho
   => Proxy# rho
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+{-# INLINE castAllCols #-}
 castAllCols _rho c = anyDicts# c (proxy# @rho)
 
 {-
@@ -377,6 +381,7 @@ wantedAllCols ::
   -> Int#
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+{-# INLINE wantedAllCols #-}
 wantedAllCols _nm _a i# j# newer c =
     Seq.insertAt
         (I# (i# +# j#))
@@ -402,6 +407,7 @@ givenAllCols1 ::
   -> Int#
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
   -> Sem.Dict (Sem.Sem c nm a)
+{-# INLINE givenAllCols1 #-}
 givenAllCols1 _nm _a i# j# older =
     unsafeCoerce
   $ Seq.index
@@ -414,6 +420,7 @@ givenAllCols2 ::
   -> Int#
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
   -> (Proxy# c -> Seq.Seq (Sem.Dict (Sem.Sem c Any Any)))
+{-# INLINE givenAllCols2 #-}
 givenAllCols2 i# j# older c =
     Seq.deleteAt
         (I# (i# +# j#))
