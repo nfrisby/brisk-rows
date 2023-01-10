@@ -193,6 +193,8 @@ data Env = Env {
     -- | Coercion from KnownLT to its method type at the given @k@, @v@, @nm@, and @rho@.
     envAllColsCo     :: !(TcKind -> TcKind -> TcType -> TcType -> TyCoRep.Coercion)
   ,
+    envApart         :: !TyCon
+  ,
     envAssign        :: !TyCon
   ,
     envCastAllCols   :: !GhcPlugins.Id
@@ -273,13 +275,16 @@ newEnv = do
     envDict <- lookupModule "BriskRows.Sem" >>= flip lookupTC "Dict"
     envDictCon <- lookupDC envDict "Dict"
 
-    (envEQ, envGT, envLT) <- do
-      tc <- lookupModule "GHC.Types" >>= flip lookupTC "Ordering"
-
-      eq <- lookupPDC tc "EQ"
-      gt <- lookupPDC tc "GT"
-      lt <- lookupPDC tc "LT"
-      pure (eq, gt, lt)
+    (envApart, envEQ) <- do
+        tc <- luTC "NameOrdering"
+        apart_ <- lookupPDC tc "NameApart"
+        eq <- lookupPDC tc "NameEQ"
+        pure (apart_, eq)
+    (envGT, envLT) <- do
+        tc <- luTC "NameApartness"
+        gt <- lookupPDC tc "NameGT"
+        lt <- lookupPDC tc "NameLT"
+        pure (gt, lt)
 
     envEmp <- luTC "ROW" >>= flip lookupPDC "Emp"
 
@@ -509,34 +514,65 @@ equal :: Env -> TcType -> TcType -> Bool
 equal env x y = Just EQ == cmp env x y
 
 apart :: Env -> TcType -> TcType -> Bool
-apart env x y = maybe False (/= EQ) $ cmp env x y
+apart env x y = maybe False (\case NameApart{} -> True; NameEQ -> False) $ cmp_ env x y
+
+data NameOrdering  = NameEQ | NameApart (Maybe NameApartness)
+data NameApartness = NameLT | NameGT
 
 cmp :: Env -> TcType -> TcType -> Maybe Ordering
-cmp env =
+cmp env l r = cmp_ env l r >>= \case
+    NameEQ      -> Just EQ
+    NameApart x -> x >>= \case
+        NameLT  -> Just LT
+        NameGT  -> Just GT
+
+cmp_ :: Env -> TcType -> TcType -> Maybe NameOrdering
+cmp_ env =
     \x y -> go $ reductionReducedType $ normaliseTcApp envFamInstEnvs TyCon.Nominal envCmpName [TcType.tcTypeKind x, x, y]
   where
-    Env {envCmpName, envEQ, envFamInstEnvs, envGT, envLT} = env
+    Env {envApart, envCmpName, envEQ, envFamInstEnvs, envGT, envLT} = env
 
     go ty = case TcType.tcSplitTyConApp_maybe ty of
         Nothing         -> Nothing
         Just (tc, args)
-          | tc == envLT -> Just LT
-          | tc == envEQ -> Just EQ
-          | tc == envGT -> Just GT
+          | tc == envEQ -> Just NameEQ
 
-          | Just (sigma, body, oversat) <- TyCon.expandSynTyCon_maybe tc args
-          -> go $ TcType.substTy (TcType.mkTvSubstPrs sigma) body `TcType.mkAppTys` oversat
+          | tc == envApart
+          , [ty'] <- args
+          -> Just $ NameApart $ go' ty'
 
-          | Just (HetReduction redn _co) <- topReduceTyFamApp_maybe envFamInstEnvs tc args
-          -> go $ reductionReducedType redn
+          | Just ty' <- step tc args
+          -> go ty'
 
           | tc == envCmpName
           , [_k, x, y] <- args
           , eqType x y
-          -> Just EQ
+          -> Just NameEQ
 
           | otherwise
           -> Nothing
+
+    go' ty = case TcType.tcSplitTyConApp_maybe ty of
+        Nothing         -> Nothing
+        Just (tc, args)
+          | tc == envLT -> Just NameLT
+          | tc == envGT -> Just NameGT
+
+          | Just ty' <- step tc args
+          -> go' ty'
+
+          | otherwise
+          -> Nothing
+
+    step tc args
+        | Just (sigma, body, oversat) <- TyCon.expandSynTyCon_maybe tc args
+        = Just $ TcType.substTy (TcType.mkTvSubstPrs sigma) body `TcType.mkAppTys` oversat
+
+        | Just (HetReduction redn _co) <- topReduceTyFamApp_maybe envFamInstEnvs tc args
+        = Just $ reductionReducedType redn
+
+        | otherwise
+        = Nothing
 
 -----
 
@@ -850,7 +886,7 @@ improve env ct = case ct of
     _ -> Nothing
   where
 
-    go lhs rhs = case getExtend env lhs of   -- the LHS will never be the Row#, will it?
+    go lhs rhs = case getExtend env lhs of
       Just lext
         | isEmp env rhs
         -> NewEqRecipe ct NothingEvTerm <$> goInverted env lext rhs []

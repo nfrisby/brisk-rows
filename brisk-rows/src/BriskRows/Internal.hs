@@ -39,6 +39,8 @@ module BriskRows.Internal (
     -- * Names
     CmpName,
     Lexico,
+    NameApartness (NameLT, NameGT),
+    NameOrdering (NameEQ, NameApart),
     ShowName (docName),
     docName#,
     -- * Auxiliary
@@ -135,7 +137,7 @@ data COL k v = k := v
 -- simplifying @Just (l :: ()) ``CmpName`` Just (r :: ())@. A plugin is
 -- necessary and sufficient specifically because these are confluent paths to
 -- 'EQ'.
-type family CmpName (l :: k) (r :: k) :: Ordering
+type family CmpName (l :: k) (r :: k) :: NameOrdering
 
 -- | The kind of a row type
 data ROW (k :: Type) (v :: Type) =
@@ -166,72 +168,90 @@ docName# _nm = docName (Proxy @nm)
 
 -----
 
+data NameApartness = NameLT | NameGT
+data NameOrdering =  NameEQ | NameApart NameApartness
+
 infixl `Lexico`
 
 -- | Lexicographic ordering
 --
 -- Use this when defining new instances of 'CmpName' for product types.
-type family Lexico (l :: Ordering) (r :: Ordering) :: Ordering
+type family Lexico (l :: NameOrdering) (r :: NameOrdering) :: NameOrdering
   where
-    Lexico LT _ = LT
-    Lexico EQ r = r
-    Lexico GT _ = GT
+    Lexico NameEQ NameEQ = NameEQ
+    Lexico l r = NameApart (LexicoApartness l r)
+
+type family LexicoApartness (l :: NameOrdering) (r :: NameOrdering) :: NameApartness
+  where
+    LexicoApartness (NameApart l) r = l
+    LexicoApartness NameEQ (NameApart r) = r
+    LexicoApartness l r = TypeError (Text "Impossible")
+
+type family FromOrdering (o :: Ordering) :: NameOrdering
+  where
+    FromOrdering LT = NameApart NameLT
+    FromOrdering EQ = NameEQ
+    FromOrdering GT = NameApart NameGT
 
 -----
 
-type instance CmpName @Char l r = Data.Type.Ord.Compare l r
+type instance CmpName @Char l r = FromOrdering (Data.Type.Ord.Compare l r)
 instance TypeLits.KnownChar c => ShowName (c :: Char) where docName c = PP.docShowS $ shows $ TypeLits.charVal c
 
-type instance CmpName @Natural l r = Data.Type.Ord.Compare l r
+type instance CmpName @Natural l r = FromOrdering (Data.Type.Ord.Compare l r)
 instance TypeLits.KnownNat n => ShowName (n :: Natural) where docName n = PP.docShowS $ shows $ TypeLits.natVal n
 
-type instance CmpName @Symbol l r = Data.Type.Ord.Compare l r
+type instance CmpName @Symbol l r = FromOrdering (Data.Type.Ord.Compare l r)
 instance TypeLits.KnownSymbol s => ShowName (s :: Symbol) where docName s = PP.docShowS $ shows $ TypeLits.symbolVal s
 
 type instance CmpName @Bool l r = CmpBool l r
-type family CmpBool (l :: Bool) (r :: Bool) :: Ordering
+type family CmpBool (l :: Bool) (r :: Bool) :: NameOrdering
   where
-    CmpBool False _     = LT
-    CmpBool _     False = GT
+    CmpBool False _     = NameApart NameLT
+    CmpBool _     False = NameApart NameGT
 instance ShowName True  where docName _prx = PP.docShowS $ shows True
 instance ShowName False where docName _prx = PP.docShowS $ shows False
 
 type instance CmpName @Ordering l r = CmpOrdering l r
-type family CmpOrdering (l :: Ordering) (r :: Ordering) :: Ordering
+type family CmpOrdering (l :: Ordering) (r :: Ordering) :: NameOrdering
   where
-    CmpOrdering LT _  = LT
-    CmpOrdering _  LT = GT
-    CmpOrdering EQ _  = LT
-    CmpOrdering _  EQ = GT
-    CmpOrdering _  _  = GT
+    CmpOrdering LT LT = NameEQ
+    CmpOrdering LT _  = NameApart NameLT
+    CmpOrdering _  LT = NameApart NameGT
+    CmpOrdering EQ EQ = NameEQ
+    CmpOrdering EQ _  = NameApart NameLT
+    CmpOrdering _  EQ = NameApart NameGT
+    CmpOrdering GT GT = NameEQ
 instance ShowName LT where docName _prx = PP.docShowS $ shows LT
 instance ShowName EQ where docName _prx = PP.docShowS $ shows EQ
 instance ShowName GT where docName _prx = PP.docShowS $ shows GT
 
 type instance CmpName @(Maybe k) l r = CmpMaybe l r
-type family CmpMaybe (l :: Maybe k) (r :: Maybe k) :: Ordering
+type family CmpMaybe (l :: Maybe k) (r :: Maybe k) :: NameOrdering
   where
-    CmpMaybe Nothing  _        = LT
-    CmpMaybe _        Nothing  = GT
+    CmpMaybe Nothing  Nothing  = NameEQ
+    CmpMaybe Nothing  _        = NameApart NameLT
+    CmpMaybe _        Nothing  = NameApart NameGT
     CmpMaybe (Just l) (Just r) = CmpName l r
 instance ShowName Nothing where docName _prx = PP.docString "Nothing"
 instance ShowName a => ShowName (Just a) where docName _prx = PP.docString "Just" `PP.docApp` docName (Proxy @a)
 
 type instance CmpName @(Either k0 k1) l r = CmpEither l r
-type family CmpEither (l :: Either k0 k1) (r :: Either k0 k1) :: Ordering
+type family CmpEither (l :: Either k0 k1) (r :: Either k0 k1) :: NameOrdering
   where
     CmpEither (Left  l) (Left  r) = CmpName l r
-    CmpEither (Left  _) _         = LT
-    CmpEither _         (Left  _) = GT
+    CmpEither (Left  _) _         = NameApart NameLT
+    CmpEither _         (Left  _) = NameApart NameGT
     CmpEither (Right l) (Right r) = CmpName l r
 instance ShowName a => ShowName (Left  a) where docName _prx = PP.docString "Left"  `PP.docApp` docName (Proxy @a)
 instance ShowName a => ShowName (Right a) where docName _prx = PP.docString "Right" `PP.docApp` docName (Proxy @a)
 
 type instance CmpName @[k] l r = CmpList l r
-type family CmpList (l :: [k]) (r :: [k]) :: Ordering
+type family CmpList (l :: [k]) (r :: [k]) :: NameOrdering
   where
-    CmpList '[]       _         = LT
-    CmpList _         '[]       = GT
+    CmpList '[]       '[]       = NameEQ
+    CmpList '[]       _         = NameApart NameLT
+    CmpList _         '[]       = NameApart NameGT
     CmpList (l ': ls) (r ': rs) = CmpName l r `Lexico` CmpName ls rs
 instance ShowNameList as => ShowName as where
     docName prx = case docNameList prx of
@@ -244,10 +264,10 @@ instance (ShowName a, ShowNameList as) => ShowNameList (a ': as)   where docName
 type instance CmpName @(NonEmpty k) (l :| ls) (r :| rs) = CmpName l r `Lexico` CmpName ls rs
 instance (ShowName a, ShowName as) => ShowName (a :| as) where docName _prx = PP.docBop " :| " PP.RightAssoc 5 (docName (Proxy @a)) (docName (Proxy @as))
 
-type instance CmpName @() l r = EQ
+type instance CmpName @() l r = NameEQ
 instance ShowName ('() :: ()) where docName _prx = PP.docString "'()"
 
-type instance CmpName @(Proxy k) l r = EQ
+type instance CmpName @(Proxy k) l r = NameEQ
 instance ShowName 'Proxy where docName _prx = PP.docString "Proxy"
 
 type instance CmpName @(Solo k) ('Solo l) ('Solo r) = CmpName l r
