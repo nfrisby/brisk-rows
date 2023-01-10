@@ -6,18 +6,18 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module BriskRows.Plugin (plugin) where
 
 import           Debug.Trace (trace)
 
-import           Control.Applicative ((<|>))
 import           Control.Monad (foldM, guard)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Functor ((<&>))
--- import           Data.List (find)
-import           Data.Maybe (fromMaybe, mapMaybe)
+import           Data.Maybe (mapMaybe)
+import           Data.Traversable (forM)
 
 import           GHC.Types.Id.Make (proxyHashId)
 import           GHC.Core.Class (Class, classTyCon)
@@ -73,36 +73,36 @@ plugin = GhcPlugins.defaultPlugin
           --
           -- TODO confirm that
             unitUFM envCmpName (rewriteCmpName env)
---          <>
---            unitUFM envExt     (rewriteExt   env)
---          <>
---            unitUFM envExtOp   (rewriteExtOp env)
       , TcRnTypes.tcPluginSolve   = \env evBindsVar gs ws -> do
+            famInstEnvs <- TcPluginM.getFamInstEnvs
 
             doTrace env $ text $ "\n\n\n==========INCOMING\n"
             doTrace env $ ppr $ gs <> ws
 
             let gidx = indexGivens env gs
 
+            -- only work on the Givens if there are no Wanteds
+            let cts = if null ws then gs else ws
+
             doTrace env $ text $ "\n\n\n==========TABLE\n"
             doTrace env $ let RowVarLTs m = gidx in ppr $ Map.toList $ Map.map Map.keys m
 
-            let recipes = mapMaybe (improve env) ws   -- TODO Given eqs
+            let recipes = mapMaybe (improve env famInstEnvs) cts
 
             doTrace env $ text $ "\n\n\n==========EQ RECIPES\n"
             doTrace env $ ppr recipes
 
             doTrace env $ text $ "\n\n\n==========NEW EQS\n"
-            newEqs <- mapM (newEq env ws) recipes
+            newEqs <- mapM (newEq env evBindsVar) recipes
 
-            let dictRecipes = mapMaybe (simplifyDict env gidx) (if null ws then gs else ws)
+            let dictRecipes = mapMaybe (simplifyDict env famInstEnvs gidx) cts
             doTrace env $ text $ "\n\n\n==========DICT RECIPES\n"
             doTrace env $ ppr dictRecipes
 
             doTrace env $ text $ "\n\n\n==========NEW DICTS\n"
             (solvedDicts, newDictss) <- fmap unzip $ mapM (newDict env evBindsVar) dictRecipes
 
-            pure $ TcPluginOk (mapMaybe oldEq recipes <> solvedDicts) (concat newEqs <> concat newDictss)
+            pure $ TcPluginOk (map oldEq recipes <> solvedDicts) (concat newEqs <> concat newDictss)
       }
   }
 
@@ -211,8 +211,6 @@ data Env = Env {
   ,
     envExtOp         :: !TyCon
   ,
-    envFamInstEnvs   :: !FamInstEnvs
-  ,
     envGT            :: !TyCon
   ,
     envGivenAllCols1 :: !GhcPlugins.Id
@@ -232,17 +230,9 @@ data Env = Env {
   ,
     envROW           :: !TyCon
   ,
-    envRestrict      :: !TyCon
-  ,
-    envSelect        :: !TyCon
-  ,
     envSem           :: !TyCon
   ,
-    envStops         :: [TyCon]
-  ,
     envUncastAllCols :: !GhcPlugins.Id
-  ,
-    envUnfoldExtOp   :: !TyCon
   ,
     envWantedAllCols :: !GhcPlugins.Id
   ,
@@ -290,8 +280,6 @@ newEnv = do
 
     envExtOp  <- luTC ":&"
 
-    envFamInstEnvs <- TcPluginM.getFamInstEnvs
-
     envGivenAllCols1 <- lookupId modul "givenAllCols1"
     envGivenAllCols2 <- lookupId modul "givenAllCols2"
     envGivenKnownLT  <- lookupId modul "givenKnownLT"
@@ -308,19 +296,9 @@ newEnv = do
 
     envROW <- luTC "ROW"
 
-    envRestrict <- luTC "Restrict"
-
-    envSelect <- luTC "Select"
-
     envSem <- lookupModule "BriskRows.Sem" >>= flip lookupTC "Sem"
 
-    -- We can skip Extend, since it's a type synonym. (TODO and so eqType handles that, right?)
-    -- We can skip Extend_Row# since this function is only ever used once we've confirmed it's not an extension.
-    envStops <- mapM luTC $ words "" -- "Cons Extend_Col Extend_Ordering Restrict_Ordering Restrict"
-
     envUncastAllCols <- lookupId modul "uncastAllCols"
-
-    envUnfoldExtOp <- luTC "UnfoldExtOp"
 
     envWantedAllCols <- lookupId modul "wantedAllCols"
     envWantedKnownLT <- lookupId modul "wantedKnownLT"
@@ -335,17 +313,6 @@ isEmp :: Env -> TcType -> Bool
 isEmp Env{envEmp} ty = case TcType.tcSplitTyConApp_maybe ty of
     Just (tc, [_k, _v]) -> envEmp == tc
     _                   -> False
-
-isStop :: Env -> TcType -> Bool
-isStop Env{envStops} ty = case TcType.tcTyConAppTyCon_maybe ty of
-    Just tc -> tc `elem` envStops
-    _       -> False
-
-mkRestrict :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
-mkRestrict Env{envRestrict} k v nm rho = TcType.mkTyConApp envRestrict [k, v, nm, rho]
-
-mkSelect :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
-mkSelect Env{envSelect} k v nm rho = TcType.mkTyConApp envSelect [k, v, nm, rho]
 
 mkExtensions :: Env -> TcKind -> TcKind -> TcType -> Extensions -> TcType
 mkExtensions env k v root exts =
@@ -380,157 +347,83 @@ rewriteCmpName env _rwenv _gs args = case args of
 
 -----
 
-{-
-rewriteExtOp :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
-rewriteExtOp env _rwenv _gs args = case args of
-  [_k, _v, rho, _col]
-    | Just tc' <- TcType.tcTyConAppTyCon_maybe rho
-    , (tc' == envEmp || tc' == envRow)
-    -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
-
-    | otherwise
-    -> pure TcRnTypes.TcPluginNoRewrite
-
-  _ -> fail ":& wrote arg count!"
-  where
-    Env{envEmp, envExtOp, envRow, envUnfoldExtOp} = env
-
-    lhs = TcType.mkTyConApp envExtOp       args
-    rhs = TcType.mkTyConApp envUnfoldExtOp args
-
-    co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:(:&)") TyCon.Nominal lhs rhs
-
-rewriteExt :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
-rewriteExt env _rwenv _gs args = case args of
-  [_k, _v, _nm, _a, rho]
-    | Just tc' <- TcType.tcTyConAppTyCon_maybe rho
-    , (tc' == envEmp || tc' == envRow)
-    -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
-
-    | otherwise
-    -> pure TcRnTypes.TcPluginNoRewrite
-
-  _ -> fail "Ext wrote arg count!"
-  where
-    Env{envEmp, envExt, envRow, envUnfoldExt} = env
-
-    lhs = TcType.mkTyConApp envExt       args
-    rhs = TcType.mkTyConApp envUnfoldExt args
-
-    co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Ext") TyCon.Nominal lhs rhs
--}
-
------
-
+data OldEquality = OldEquality !TcType !TcType
 data NewEquality = NewEquality !TcType !TcType
 
-data NewEqRecipe = NewEqRecipe !Ct !MaybeEvTerm ![NewEquality]
+data NewEqRecipe = NewEqRecipe !Ct !OldEquality ![NewEquality]
 
-data MaybeEvTerm = NothingEvTerm | JustEvTerm !TcEvidence.EvTerm
+oldEq :: NewEqRecipe -> (TcEvidence.EvTerm, Ct)
+oldEq (NewEqRecipe old (OldEquality lhs rhs) _news) =
+    case Ct.ctEvidence old of
+        Ct.CtGiven{} ->
+            -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
+            let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
+            in (evtm, old)
+        Ct.CtWanted{} ->
+            let co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Row.Rearrange") TyCon.Nominal lhs rhs
+            in (TcEvidence.evCoercion co, old)
 
-oldEq :: NewEqRecipe -> Maybe (TcEvidence.EvTerm, Ct)
-oldEq (NewEqRecipe old mbEvTerm _news) = case mbEvTerm of
-    NothingEvTerm -> Nothing
-    JustEvTerm ev -> Just (ev, old)
-
-newEq :: Env -> [Ct] -> NewEqRecipe -> TcPluginM [Ct]
-newEq env olds (NewEqRecipe old _mbEvTerm news) =
-    mapMaybe id <$> mapM each news
-  where
-    isOld :: NewEquality -> Maybe Ct
-    isOld =
-        foldl (\acc f new -> f new <|> acc new) (\_ -> Nothing)
-        [ \(NewEquality l r) ->
-            if (eqType l l' && eqType r r') || (eqType l r' && eqType r l')
-            then Just old'
-            else Nothing
-        | old' <- olds
-        , Predicate.EqPred Predicate.NomEq l' r' <- [Predicate.classifyPredType $ Ct.ctPred old']
-        ]
-
-    each :: NewEquality -> TcPluginM (Maybe Ct)
-    each new@(NewEquality l r)
-        -- don't emit the equality if it already exists
-      | Just ct <- isOld new = do
-        doTrace env $ text "SKIPPING" <+> ppr (new, ct)
-        pure Nothing
-      | otherwise = do
+newEq :: Env -> TcEvidence.EvBindsVar -> NewEqRecipe -> TcPluginM [Ct]
+newEq env evBindsVar (NewEqRecipe old _oldeq news) =
+    forM news $ \(NewEquality lhs rhs) -> do
         let loc = Ct.ctLoc old
-            eq  = Predicate.mkPrimEqPred l r
+            eq  = Predicate.mkPrimEqPred lhs rhs
         doTrace env $ text "EMITTING" <+> ppr eq
-        fmap (Just . Ct.mkNonCanonical) $ TcPluginM.newWanted loc eq
+        Ct.mkNonCanonical <$> case Ct.ctEvidence old of
+            Ct.CtWanted{} -> TcPluginM.newWanted loc eq
+            Ct.CtGiven {} -> 
+                TcPluginM.newGiven evBindsVar loc eq
+              $ Core.Coercion
+              $ GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Row.Rearrange") TyCon.Nominal lhs rhs
 
 instance GhcPlugins.Outputable NewEquality where
   ppr (NewEquality lhs rhs) = text "NewEquality" <+> ppr (lhs, rhs)
 
 instance GhcPlugins.Outputable NewEqRecipe where
-  ppr (NewEqRecipe old mbEvTerm news) = text "NewEqRecipe" <+> ppr (old, ppr mbEvTerm, news)
-
-instance GhcPlugins.Outputable MaybeEvTerm where
-  ppr = ppr . \case
-      NothingEvTerm -> Nothing
-      JustEvTerm ev -> Just ev
+  ppr (NewEqRecipe old _oldeq news) = text "NewEqRecipe" <+> ppr (old, news)
 
 -----
 
 data Extension =
     -- | @Extend_Row# {k} {v} nm a rho _err@
-    Extend !TcType !(Maybe TcType) !TcKind !TcKind !TcType !TcType !TcType
+    Extend !TcKind !TcKind !TcType !TcType !TcType
 
 getExtend :: Env -> TcType -> Maybe Extension
 getExtend env ty = case TcType.tcSplitTyConApp_maybe ty of
     Just (tc, args)
-{-      | tc == envExtend
-      , [k, v, nm, a, rho, _err] <- args
-      -> Just $ Extend ty Nothing k v nm a rho
-      | tc == envExt
-      , [k, v, nm, a, rho] <- args
-      -> Just $ Extend ty (Just $ TcType.mkTyConApp envUnfoldExt args) k v nm a rho
--}
       | tc == envExtOp
       , [k, v, rho, col] <- args
       , Just (tc', args') <- TcType.tcSplitTyConApp_maybe col
       , tc' == envAssign
       , [_k, _v, nm, a] <- args'
-      -> Just $ Extend ty (Just $ TcType.mkTyConApp envUnfoldExtOp args) k v nm a rho
+      -> Just $ Extend k v nm a rho
     _ -> Nothing
   where
-    Env{envAssign, envExtOp, envUnfoldExtOp} = env
-
-{-
-getExistingEq :: Env -> Ct -> Maybe (Extension, Extension)
-getExistingEq env ct = case ct of
-    Ct.CNonCanonical{}
-      | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe (Ct.ctPred ct)
-      , Just lext <- getExtend env lhs
-      , Just rext <- getExtend env rhs
-      -> Just (lext, rext)
-    _ -> Nothing
--}
+    Env{envAssign, envExtOp} = env
 
 -----
 
-equal :: Env -> TcType -> TcType -> Bool
-equal env x y = Just EQ == cmp env x y
+equal :: Env -> FamInstEnvs -> TcType -> TcType -> Bool
+equal env famInstEnvs x y = Just EQ == cmp env famInstEnvs x y
 
-apart :: Env -> TcType -> TcType -> Bool
-apart env x y = maybe False (\case NameApart{} -> True; NameEQ -> False) $ cmp_ env x y
+apart :: Env -> FamInstEnvs -> TcType -> TcType -> Bool
+apart env famInstEnvs x y = maybe False (\case NameApart{} -> True; NameEQ -> False) $ cmp_ env famInstEnvs x y
 
 data NameOrdering  = NameEQ | NameApart (Maybe NameApartness)
 data NameApartness = NameLT | NameGT
 
-cmp :: Env -> TcType -> TcType -> Maybe Ordering
-cmp env l r = cmp_ env l r >>= \case
+cmp :: Env -> FamInstEnvs -> TcType -> TcType -> Maybe Ordering
+cmp env famInstEnvs l r = cmp_ env famInstEnvs l r >>= \case
     NameEQ      -> Just EQ
     NameApart x -> x >>= \case
         NameLT  -> Just LT
         NameGT  -> Just GT
 
-cmp_ :: Env -> TcType -> TcType -> Maybe NameOrdering
-cmp_ env =
-    \x y -> go $ reductionReducedType $ normaliseTcApp envFamInstEnvs TyCon.Nominal envCmpName [TcType.tcTypeKind x, x, y]
+cmp_ :: Env -> FamInstEnvs -> TcType -> TcType -> Maybe NameOrdering
+cmp_ env famInstEnvs =
+    \x y -> go $ reductionReducedType $ normaliseTcApp famInstEnvs TyCon.Nominal envCmpName [TcType.tcTypeKind x, x, y]
   where
-    Env {envApart, envCmpName, envEQ, envFamInstEnvs, envGT, envLT} = env
+    Env {envApart, envCmpName, envEQ, envGT, envLT} = env
 
     go ty = case TcType.tcSplitTyConApp_maybe ty of
         Nothing         -> Nothing
@@ -568,7 +461,7 @@ cmp_ env =
         | Just (sigma, body, oversat) <- TyCon.expandSynTyCon_maybe tc args
         = Just $ TcType.substTy (TcType.mkTvSubstPrs sigma) body `TcType.mkAppTys` oversat
 
-        | Just (HetReduction redn _co) <- topReduceTyFamApp_maybe envFamInstEnvs tc args
+        | Just (HetReduction redn _co) <- topReduceTyFamApp_maybe famInstEnvs tc args
         = Just $ reductionReducedType redn
 
         | otherwise
@@ -592,8 +485,8 @@ instance GhcPlugins.Outputable NewDictRecipe where
   ppr (NewKnownLTRecipe old k v x rho i        rho') = text "NewKnownLTRecipe" <+> ppr (old, k, v, x, rho, i, rho')
   ppr (NewAllColsRecipe old k v c rho extracts rho') = text "NewAllColsRecipe" <+> ppr (old, k, v, c, rho, extracts, rho')
 
-simplifyDict :: Env -> RowVarLTs -> Ct -> Maybe NewDictRecipe
-simplifyDict env gidx ct = case ct of
+simplifyDict :: Env -> FamInstEnvs -> RowVarLTs -> Ct -> Maybe NewDictRecipe
+simplifyDict env famInstEnvs gidx ct = case ct of
     Ct.CDictCan{Ct.cc_class, Ct.cc_tyargs}
 
       | cc_class == envKnownLT
@@ -612,11 +505,11 @@ simplifyDict env gidx ct = case ct of
     Env{envAllCols, envExtOp, envKnownLT} = env
 
     goKnownLT :: TcType -> Extension -> Maybe (Int, TcType)
-    goKnownLT x ext = ($ recu) $ case cmp env x nm of
+    goKnownLT x ext = ($ recu) $ case cmp env famInstEnvs x nm of
         Just o  -> Just . if LT == o then incr else skip
         Nothing -> keep
       where
-        Extend _ty _mbNewTy k v nm a rho = ext
+        Extend k v nm a rho = ext
 
         recu = getExtend env rho >>= goKnownLT x
 
@@ -645,15 +538,15 @@ simplifyDict env gidx ct = case ct of
             [] -> if null hits then Nothing else Just (hits, mkExtensions env k v root (Extends (reverse misses)))
 
             (nm, a) : assocs'
-              | Just evex <- knownLtRoot       env gidx nm root
-              , Just i    <- knownLtExtensions env fst  nm misses
+              | Just evex <- knownLtRoot       env             gidx nm root
+              , Just i    <- knownLtExtensions env famInstEnvs fst  nm misses
               , not new_misses
               -> goAllCols k v root ((nm, a, KnownLtInt i evex) : hits') misses' (Extends assocs')
 
               | otherwise
               -> goAllCols k v root hits' ((nm, a) : misses') (Extends assocs')
               where
-                (new_misses, misses', hits') = cmpPartition env fst3 fstsnd3 bump nm misses hits
+                (new_misses, misses', hits') = cmpPartition env famInstEnvs fst3 fstsnd3 bump nm misses hits
       where
         Extends assocs = exts
 
@@ -703,27 +596,28 @@ knownLtRoot env (RowVarLTs gidx) nm root
 
 cmpPartition ::
      Env
+  -> FamInstEnvs
   -> (a -> TcType) -> (a -> b) -> (a -> a)
   -> TcType
   -> [b] -> [a]
   -> (Bool, [b], [a])
-cmpPartition env prj cnv bump x misses0 =
+cmpPartition env famInstEnvs prj cnv bump x misses0 =
     go False misses0 []
   where
     go flag misses hits = \case
         []   -> (flag, misses, reverse hits)
-        y:ys -> case cmp env x (prj y) of
+        y:ys -> case cmp env famInstEnvs x (prj y) of
             Nothing -> go True (cnv y : misses)       hits  ys
             Just LT -> let !y' = bump y in
                        go flag          misses  (y' : hits) ys
             Just EQ -> go flag          misses  (y  : hits) ys
             Just GT -> go flag          misses  (y  : hits) ys
 
-knownLtExtensions :: Env -> (a -> TcType) -> TcType -> [a] -> Maybe Int
-knownLtExtensions env prj x =
+knownLtExtensions :: Env -> FamInstEnvs -> (a -> TcType) -> TcType -> [a] -> Maybe Int
+knownLtExtensions env famInstEnvs prj x =
     fmap sum . traverse each
   where
-    each y = cmp env x (prj y) <&> \case
+    each y = cmp env famInstEnvs x (prj y) <&> \case
         LT -> 1
         EQ -> 0
         GT -> 0
@@ -746,7 +640,7 @@ newDict env evBindsVar = \case
                    $ (`GhcPlugins.mkCast` envKnownLTCo k v x rho)
                    $ Ct.ctEvExpr (Ct.ctEvidence old)
 
-            -- GHC plugin interface's weird rule: use a given's own evidence in order to eliminate it.
+            -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
             let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
             pure ((evtm, old), [Ct.mkNonCanonical new])
         Ct.CtWanted{} -> do
@@ -780,7 +674,7 @@ newDict env evBindsVar = \case
                                 `Core.mkTyApps` [k, v, c, nm, a]
                                 `Core.mkApps`   [ Core.mkTyApps (TcEvidence.evId proxyHashId) [knd, typ] | (knd, typ) <- [(k, nm), (v, a)] ]
                                 `Core.mkApps`   [Core.mkIntLit envPlatform (toInteger i), evex, older]
-                        -- get the payload of the Dict
+                        -- retrieve the payload of the Dict
                         TcPluginM.newGiven evBindsVar loc ty $
                             Core.Case scrut case_bndr ty
                                 [Core.Alt
@@ -809,7 +703,7 @@ newDict env evBindsVar = \case
                                         mkUncastAllCols env k v c rho' evex
                     `GhcPlugins.mkCast` GhcPlugins.mkSymCo (envAllColsCo k v c rho')
 
-            -- GHC plugin interface's weird rule: use a given's own evidence in order to eliminate it.
+            -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
             let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
             pure ((evtm, old), map Ct.mkNonCanonical (new : news))
         Ct.CtWanted{} -> do
@@ -878,211 +772,139 @@ mkUncastAllCols env k v c rho evex =
 -- > l :& nm := a ~ r :& nm := a   implies/requires   l ~ r
 --
 -- > rho :& x := a :& y := b :& ... ~ Row# cols   implies/requires   rho ~ Row# cols :# y :# x, b ~ Select y ..., a ~ Select x ...
-improve :: Env -> Ct -> Maybe NewEqRecipe
-improve env ct = case ct of
+improve :: Env -> FamInstEnvs -> Ct -> Maybe NewEqRecipe
+improve env famInstEnvs ct = case ct of
     Ct.CNonCanonical{}
       | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe (Ct.ctPred ct)
       -> go lhs rhs
     _ -> Nothing
   where
+    go lhs rhs = case (getExtend env lhs, getExtend env rhs) of
+        (Nothing,   Nothing  ) -> Nothing
+        (Just{},    Nothing  ) -> if isEmp env rhs then Just $ error "contra" else Nothing
+        (Nothing,   Just{}   ) -> if isEmp env lhs then Just $ error "contra" else Nothing
+        (Just lext, Just rext) ->
+            -- wait for kinds to match
+            if not (sameKinds lext rext) then Nothing else
+            NewEqRecipe ct (OldEquality lhs rhs) <$> isRearranged env famInstEnvs lext rext
 
-    go lhs rhs = case getExtend env lhs of
-      Just lext
-        | isEmp env rhs
-        -> NewEqRecipe ct NothingEvTerm <$> goInverted env lext rhs []
-
-        | Just rext <- getExtend env rhs
-        -> goExtExt env ct lext rext
-
-      _ -> Nothing
-
--- | Invert extensions to restrictions
---
--- @root :& nmN := aN :& ... :& nm2 := a2 :& nm1 := a1@ equals @Row# [k1 := v1, k2 := v2, ..., kN := vN]@
--- only if @a1 ~ Select nm1 (Row# [k1 ... vN])@, @a2 ~ Select nm2 (Row# [k1 ... vN])@, all the way to @aN ~ Select nmN (Row# [k1 ... vN])@
--- and also @root ~ Restrict nmN (... (Restrict nm2 (Restrict nm1 (Row# [k1 ... vN]))))@.
-goInverted :: Env -> Extension -> TcType -> [NewEquality] -> Maybe [NewEquality]
-goInverted env ext rhs acc =
-    case getExtend env rho of
-      Just ext' -> goInverted env ext' rhs' acc'
-      Nothing   ->
-        -- emit no equalities if the root is one of our internal type families
-        if isStop env rho then Nothing else
-        Just (NewEquality rho rhs' : acc')
-  where
-    Extend _ty _mbNewTy k v nm a rho = ext
-
-    acc' = NewEquality a (mkSelect env k v nm rhs) : acc
-
-    rhs' = mkRestrict env k v nm rhs
-
-goExtExt :: Env -> Ct -> Extension -> Extension -> Maybe NewEqRecipe
-goExtExt env old lext rext
-    -- wait for kinds to match
-  | not $ lk `eqType` rk && lv `eqType` rv = Nothing
-
-  | otherwise =
-        (NewEqRecipe old NothingEvTerm <$> goOuterInjectivity env lext rext)
-    <|>
-        (       (\(co, eqs) -> NewEqRecipe old (JustEvTerm (TcEvidence.evCoercion co)) eqs)
-            <$> (isRearranged env lext rext <|> goUnfold lext rext)
-        )
-  where
-    Extend _lb _lty lk lv _lnm _la _lrho = lext
-    Extend _rb _rty rk rv _rnm _ra _rrho = rext
-
--- | This simple treatment of just one layer suffices for the general
--- definitions in "BriskRows.Internal.RV" etc.
-goOuterInjectivity :: Env -> Extension -> Extension -> Maybe [NewEquality]
-goOuterInjectivity env lext rext
-    -- if the outermost names are equal, require the images and (recursively) extended rows are too
-  | equal env lnm rnm   = Just [NewEquality la ra, NewEquality lrho rrho]
-
-    -- This is commented out because 'isRearranged' supplants this rule.
-{-
-    -- if the extended rows are equal, require the outermost names and images are too
-  | equal env lrho rrho = Just [NewEquality la ra, NewEquality lnm  rnm ]
--}
-
-  | otherwise = Nothing
-  where
-    Extend _lb _lty _lk _lv lnm la lrho = lext
-    Extend _rb _rty _rk _rv rnm ra rrho = rext
-
--- | This ensures that unsolved equivalences are not generalized over.
---
--- TODO cleaner way?
-goUnfold :: Extension -> Extension -> Maybe (TcEvidence.TcCoercion, [NewEquality])
-goUnfold lext rext
-    -- ensure both are expanded
-  | Nothing <- lmbNewTy
-  , Nothing <- rmbNewTy
-  = Nothing
-
---  , Nothing <- find (eq2 (lext, rext)) existingEqs -} = Just (co, [NewEquality lty rty])
-
-  | otherwise = Just (co, [NewEquality (fromMaybe lty lmbNewTy) (fromMaybe rty rmbNewTy)])
-  where
-    Extend lty lmbNewTy _lk _lv _lnm _la _lrho = lext
-    Extend rty rmbNewTy _rk _rv _rnm _ra _rrho = rext
-
-    _eq2 (ll, lr) (rl, rr) = eqExtension ll rl && eqExtension lr rr
-
-    -- TODO Any way something like floating could make this unsound? If so, any
-    -- way to express within this coercion that it depends on the other
-    -- equalities?
-    co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Perm") TyCon.Nominal lty rty
-
-eqExtension :: Extension -> Extension -> Bool
-eqExtension (Extend _ _ lk lv lnm la lrho) (Extend _ _ rk rv rnm ra rrho)
-  =  lk   `eqType` rk
-  && lv   `eqType` rv
-  && lnm  `eqType` rnm
-  && la   `eqType` ra
-  && lrho `eqType` rrho
-
------
-
-{-
-foobar :: (a -> Maybe b) -> [a] -> [(a, [b])]
-foobar f =
-    \xs -> fst $ go id (map f xs) xs
-  where
-   go acc ys = \case
-       []   -> ([], [])
-       x:xs -> let (xs', ys') = go (maybe acc (\y -> acc . (y:)) (head ys)) (tail ys) xs
-               in ((x, acc ys') : xs', maybe id (:) (head ys) ys')
--}
+    sameKinds :: Extension -> Extension -> Bool
+    sameKinds lext rext =
+        eqType lk rk && eqType lv rv
+      where
+        Extend lk lv _lnm _la _lrho = lext
+        Extend rk rv _rnm _ra _rrho = rext
 
 -----
 
 data Extensions = Extends [(TcType, TcType)]
 
+-- | Zero or more 'getExtend' calls
+--
+-- Note that the leftmost element is the innermost column.
 peel :: Env -> Extension -> (TcType, Extensions)
-peel env ext =
-    ((nm, a) `cons`) <$> maybe (rho, Extends []) (peel env) (getExtend env rho)
+peel env = peel_ env []
+
+peel_ :: Env -> [(TcType, TcType)] -> Extension -> (TcType, Extensions)
+peel_ env acc ext =
+    case getExtend env rho of
+        Nothing   -> (rho, Extends acc')
+        Just ext' -> peel_ env acc' ext'
   where
-    Extend _b _tc _k _v nm a rho = ext
+    Extend _k _v nm a rho = ext
 
-    cons x (Extends xs) = Extends (x : xs)
+    acc' = (nm, a) : acc
 
-pop :: Env -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
-pop env needle misses = \case
+-- | Pluck out the shallowest column that is equal to the given name and on
+-- both sides of the equivalence under only extensions that are apart from the
+-- given name
+pop :: Env -> FamInstEnvs -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
+pop env famInstEnvs needle misses = \case
     Extends []               -> Nothing
     Extends (assoc : assocs)
         -- TODO zonk them?
       | eq  (fst assoc) -> do guard (all (apt . fst) misses); Just (snd assoc, Extends assocs)
-      | apt (fst assoc) -> fmap (cons assoc) <$> pop env needle misses (Extends assocs)
+      | apt (fst assoc) -> fmap (cons assoc) <$> pop env famInstEnvs needle misses (Extends assocs)
       | otherwise       -> Nothing
   where
     cons x (Extends xs) = Extends (x : xs)
 
-    eq  = equal env needle
-    apt = apart env needle
+    eq  = equal env famInstEnvs needle
+    apt = apart env famInstEnvs needle
 
------
+rev :: Extensions -> Extensions
+rev (Extends xs) = Extends (reverse xs)
 
--- | Implied smaller equalities and a root-to-root coercion for two equated
--- extensions whose columns names are either merely rearranged or else only one
--- degree of freedom away from that.
+len :: Extensions -> Int
+len (Extends xs) = length xs
+
+-- | Decompose commutative rearrangements by repeatedly calling 'pop'
 --
--- We must use 'typesCantMatch' in 'pop', or else this is unsound. Without
--- 'typesCantMatch', it would simplify @l :& a := Int :& b := Char ~ r :& b :=
--- Int :& a := Char@ to @(l ~ r, Int ~ Char)@. The @l ~ r@ conclusion is sound,
--- but the contradiction is not because the equivalence is satisfiable, eg with
--- @a ~ b@.
-isRearranged :: Env -> Extension -> Extension -> Maybe (TcEvidence.TcCoercion, [NewEquality])
-isRearranged env lext rext =
-    (,) co <$> goAssocs [] [] lassocs0 rassocs0
+-- Also, after the popping is done, if (a) one of side of the remnants is just
+-- the replication of a single name, (b) the roots are matched or at least one
+-- is 'Emp', and (c) the extensions are the same length, then unify the columns
+-- via a zip and also unify the roots.
+isRearranged :: Env -> FamInstEnvs -> Extension -> Extension -> Maybe [NewEquality]
+isRearranged env famInstEnvs lext rext =
+    go [] lexts0 [] rassocs0
   where
-    eq = equal env
+    (lroot, rev -> lexts0)                 = peel env lext
+    (rroot, Extends (reverse -> rassocs0)) = peel env rext
 
-    -- We're solving the equality using this coercion, but we're also adding
-    -- new Wanted equalities that ensure this equality will /eventually zonk/
-    -- to a mere rearrangement.
-    --
-    -- TODO Any way something like floating could make this unsound? If so, any
-    -- way to express within this coercion that it depends on the other
-    -- equalities?
-    co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Perm") TyCon.Nominal lty rty
+    Extend lk lv _lnm _la _lrho = lext
+    Extend rk rv _rnm _ra _rrho = rext
 
-    Extend lty _lmbNewTy _lk _lv _lnm _la _lrho = lext
-    Extend rty _rmbNewTy _rk _rv _rnm _ra _rrho = rext
+    same    = eqType lroot rroot
+    matched = isEmp env lroot || isEmp env rroot || same
 
-    (lroot, lassocs0) = peel env lext
-    (rroot, rassocs0) = peel env rext
+    go neweqs lexts rmisses = \case
+        r:rs -> case pop env famInstEnvs (fst r) rmisses lexts of
+            Nothing           -> go neweqs                            lexts (r : rmisses) rs
+            Just (la, lexts') -> go (NewEquality la (snd r) : neweqs) lexts'     rmisses  rs
+        []
+            | isEmp env rroot, length rmisses < len lexts
+            -> error "contradiction"
 
-    goAssocs acc miss lassocs rassocs = case lassocs of
-        Extends []                     -> goDone acc miss rassocs
-        Extends ((lnm, la) : lassocs') ->
-         case pop env lnm miss rassocs of
-             Just (ra, rassocs') -> goAssocs (NewEquality la ra : acc)              miss  (Extends lassocs') rassocs'
-             Nothing             -> goAssocs acc                       ((lnm, la) : miss) (Extends lassocs') rassocs
+            | isEmp env lroot, len lexts < length rmisses
+            -> error "contradiction"
 
-    goDone acc miss rassocs = case let Extends xs = rassocs in (miss, xs) of
-        ([], []) ->
-            -- The column names are merely rearranged, so this equality
-            -- simplifies to requiring the roots are equal.
-            pure $ NewEquality lroot rroot : acc
+            -- If the roots match, all the remaining rights are equal and the
+            -- same length as the remaining lefts, then all the names must be
+            -- the same.
+            | matched
+            , Just (rnm, ras) <- checkMono env famInstEnvs rmisses
+            , let Extends xs = lexts
+            , Just acc <- zipper neweqs (\acc (lnm, la) ra -> NewEquality lnm rnm : NewEquality la ra : acc) xs ras
+            -> Just $ if same then acc else NewEquality lroot rroot : acc
 
-        ([],  _:_) -> Nothing   -- currently ragged
-        (_:_, [] ) -> Nothing   -- currently ragged
+            -- ditto, reflected
+            | let Extends xs = lexts
+            , matched
+            , Just (lnm, las) <- checkMono env famInstEnvs xs
+            , Just acc <- zipper neweqs (\acc la (rnm, ra) -> NewEquality lnm rnm : NewEquality la ra : acc) las rmisses
+            -> Just $ if same then acc else NewEquality lroot rroot : acc
 
-        ((lnm0, la0) : misses, (rnm0, ra0) : leftovers)
-          | not $ eqType lroot rroot      -> Nothing
-          | all (eq lnm0 . fst) misses    -> goUni False acc lnm0 (reverse $ la0 : map snd misses   ) (          (rnm0, ra0) : leftovers)
-          | all (eq rnm0 . fst) leftovers -> goUni True  acc rnm0 (          ra0 : map snd leftovers) (reverse $ (lnm0, la0) : misses   )
-          | otherwise                     -> Nothing
+            | null neweqs
+            -> Nothing
 
-    -- The roots are identical and one side has identical names.
-    --
-    -- If there's the same number of names on both sides, require all columns
-    -- are equal.
-    goUni flipped acc lnm las rassocs = case (las, rassocs) of
-        ([],  [] ) -> Just acc
-        ([],  _:_) -> Nothing   -- currently ragged
-        (_:_, [] ) -> Nothing   -- currently ragged
+            | otherwise
+            -> Just $
+                  NewEquality (mkExtensions env lk lv lroot lexts)
+                              (mkExtensions env rk rv rroot (Extends (reverse rmisses)))
+                : neweqs
 
-        (la : las', (rnm, ra) : rassocs') -> goUni flipped (mk lnm rnm : mk la ra : acc) lnm las' rassocs'
-      where
-        mk l r = if flipped then NewEquality r l else NewEquality l r
+checkMono :: Env -> FamInstEnvs -> [(TcType, TcType)] -> Maybe (TcType, [TcType])
+checkMono env famInstEnvs =
+    \case
+        []               -> Nothing
+        (nm, a) : assocs -> go nm [a] assocs
+  where
+    go x acc = \case
+        []               -> Just (x, acc)
+        (nm, a) : assocs -> if equal env famInstEnvs x nm then go x (a : acc) assocs else Nothing
+
+zipper :: [c] -> ([c] -> a -> b -> [c]) -> [a] -> [b] -> Maybe [c]
+zipper acc f xs ys = case (xs, ys) of
+    ([],    []   ) -> Just acc
+    (x:xs', y:ys') -> zipper (f acc x y) f xs' ys'
+    _              -> Nothing   -- ragged

@@ -39,7 +39,7 @@ module BriskRows.Internal (
     -- * Names
     CmpName,
     Lexico,
-    NameApartness (NameLT, NameGT),
+    NameApartness (NameGT, NameLT),
     NameOrdering (NameEQ, NameApart),
     ShowName (docName),
     docName#,
@@ -204,11 +204,13 @@ instance TypeLits.KnownNat n => ShowName (n :: Natural) where docName n = PP.doc
 type instance CmpName @Symbol l r = FromOrdering (Data.Type.Ord.Compare l r)
 instance TypeLits.KnownSymbol s => ShowName (s :: Symbol) where docName s = PP.docShowS $ shows $ TypeLits.symbolVal s
 
-type instance CmpName @Bool l r = CmpBool l r
-type family CmpBool (l :: Bool) (r :: Bool) :: NameOrdering
+type instance CmpName @Bool l r = FromOrdering (CmpBool l r)
+type family CmpBool (l :: Bool) (r :: Bool) :: Ordering
   where
-    CmpBool False _     = NameApart NameLT
-    CmpBool _     False = NameApart NameGT
+    CmpBool False False = EQ
+    CmpBool False _     = LT
+    CmpBool _     False = GT
+    CmpBool True  True  = EQ
 instance ShowName True  where docName _prx = PP.docShowS $ shows True
 instance ShowName False where docName _prx = PP.docShowS $ shows False
 

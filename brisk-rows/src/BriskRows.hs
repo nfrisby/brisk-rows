@@ -19,6 +19,8 @@ module BriskRows (
     -- * Names
     CmpName,
     Lexico,
+    NameApartness (NameGT, NameLT),
+    NameOrdering (NameEQ, NameApart),
     ShowName (docName),
     ) where
 
