@@ -88,16 +88,16 @@ plugin = GhcPlugins.defaultPlugin
             doTrace env $ text $ "\n\n\n==========TABLE\n"
             doTrace env $ let RowVarLTs m = gidx in ppr $ Map.toList $ Map.map Map.keys m
 
-            let (eq_contras, recipes) = mapStep (improve env famInstEnvs) cts
+            let (irrel_contras, recipes) = mapStep (improve env famInstEnvs) cts
 
-            doTrace env $ text $ "\n\n\n==========EQ RECIPES\n"
+            doTrace env $ text $ "\n\n\n==========IRREL RECIPES\n"
             doTrace env $ ppr recipes
 
-            doTrace env $ text $ "\n\n\n==========NEW EQS\n"
-            newEqs <- mapM (newEq env evBindsVar) recipes
+            doTrace env $ text $ "\n\n\n==========NEW IRREL\n"
+            newIrrels <- mapM (newIrrel env evBindsVar) recipes
 
             doTrace env $ text $ "\n\n\n==========CONTRADICTIONS\n"
-            doTrace env $ ppr eq_contras
+            doTrace env $ ppr irrel_contras
 
             let dictRecipes = mapMaybe (simplifyDict env famInstEnvs gidx) cts
             doTrace env $ text $ "\n\n\n==========DICT RECIPES\n"
@@ -107,11 +107,11 @@ plugin = GhcPlugins.defaultPlugin
             (solvedDicts, newDictss) <- fmap unzip $ mapM (newDict env evBindsVar) dictRecipes
 
             pure TcPluginSolveResult {
-                tcPluginInsolubleCts = eq_contras
+                tcPluginInsolubleCts = irrel_contras
               ,
-                tcPluginSolvedCts    = map oldEq recipes <> solvedDicts
+                tcPluginSolvedCts    = map oldIrrel recipes <> solvedDicts
               ,
-                tcPluginNewCts       = concat newEqs <> concat newDictss
+                tcPluginNewCts       = concat newIrrels <> concat newDictss
               }
       }
   }
@@ -379,10 +379,10 @@ rewriteCmpName env _rwenv _gs args = case args of
 data OldEquality = OldEquality !TcType !TcType
 data NewEquality = NewEquality !TcType !TcType
 
-data NewEqRecipe = NewEqRecipe !Ct !OldEquality ![NewEquality]
+data NewIrrelRecipe = NewEqRecipe !Ct !OldEquality ![NewEquality]
 
-oldEq :: NewEqRecipe -> (TcEvidence.EvTerm, Ct)
-oldEq (NewEqRecipe old (OldEquality lhs rhs) _news) =
+oldIrrel :: NewIrrelRecipe -> (TcEvidence.EvTerm, Ct)
+oldIrrel (NewEqRecipe old (OldEquality lhs rhs) _news) =
     case Ct.ctEvidence old of
         Ct.CtGiven{} ->
             -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
@@ -392,8 +392,8 @@ oldEq (NewEqRecipe old (OldEquality lhs rhs) _news) =
             let co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Row.Rearrange") TyCon.Nominal lhs rhs
             in (TcEvidence.evCoercion co, old)
 
-newEq :: Env -> TcEvidence.EvBindsVar -> NewEqRecipe -> TcPluginM [Ct]
-newEq env evBindsVar (NewEqRecipe old _oldeq news) =
+newIrrel :: Env -> TcEvidence.EvBindsVar -> NewIrrelRecipe -> TcPluginM [Ct]
+newIrrel env evBindsVar (NewEqRecipe old _oldeq news) =
     forM news $ \(NewEquality lhs rhs) -> do
         let loc = Ct.ctLoc old
             eq  = Predicate.mkPrimEqPred lhs rhs
@@ -408,7 +408,7 @@ newEq env evBindsVar (NewEqRecipe old _oldeq news) =
 instance GhcPlugins.Outputable NewEquality where
   ppr (NewEquality lhs rhs) = text "NewEquality" <+> ppr (lhs, rhs)
 
-instance GhcPlugins.Outputable NewEqRecipe where
+instance GhcPlugins.Outputable NewIrrelRecipe where
   ppr (NewEqRecipe old _oldeq news) = text "NewEqRecipe" <+> ppr (old, news)
 
 -----
@@ -877,7 +877,7 @@ instance Monad Step where
 -- > l :& nm := a ~ r :& nm := a   implies/requires   l ~ r
 --
 -- > rho :& x := a :& y := b :& ... ~ Row# cols   implies/requires   rho ~ Row# cols :# y :# x, b ~ Select y ..., a ~ Select x ...
-improve :: Env -> FamInstEnvs -> Ct -> Step NewEqRecipe
+improve :: Env -> FamInstEnvs -> Ct -> Step NewIrrelRecipe
 improve env famInstEnvs ct = case ct of
     Ct.CNonCanonical{}
       | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe (Ct.ctPred ct)
