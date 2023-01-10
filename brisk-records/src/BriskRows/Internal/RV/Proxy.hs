@@ -44,10 +44,8 @@ delP :: forall {nm} {rho} {proxy} {a}. KnownLT nm rho => proxy nm -> Rcd (rho :&
 delP = \nm -> del# (name# nm)
 
 -- | Alias of 'prj#'
-prjP :: forall {nm} {a} {rho} {proxy}. (KnownLT nm rho, Found a ~ Find nm rho) => proxy nm -> Rcd rho -> a
+prjP :: forall {nm} {a} {rho} {proxy}. KnownLT nm rho => proxy nm -> Rcd (rho :& nm := a) -> a
 prjP = \nm -> prj# (name# nm)
-
--- prjP :: forall {nm} {a} {rho} {proxy}. KnownLT nm (rho :& nm := a) => proxy nm -> Rcd (rho :& nm := a) -> a
 
 -----
 
@@ -60,10 +58,8 @@ wknP :: forall {nm} {rho} {proxy} {a} {ans}. KnownLT nm rho => proxy nm -> (Vrt 
 wknP = \nm -> wkn# (name# nm)
 
 -- | Alias of 'inj#'
-injP :: forall {nm} {a} {rho} {proxy}. (KnownLT nm rho, Found a ~ Find nm rho) => proxy nm -> a -> Vrt rho
+injP :: forall {nm} {a} {rho} {proxy}. KnownLT nm rho => proxy nm -> a -> Vrt (rho :& nm := a)
 injP = \nm -> inj# (name# nm)
-
--- injP :: forall {nm} {a} {rho} {proxy}. KnownLT nm (rho :& nm := a) => proxy nm -> a -> Vrt (rho :& nm := a)
 
 -----
 

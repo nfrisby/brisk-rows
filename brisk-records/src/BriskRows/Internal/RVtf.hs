@@ -97,11 +97,9 @@ del# = \nm rcd ->
     in
     rcd'
 
--- prj2 :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
-
 -- | Project a value out of the record
-prj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Rcd fld rho -> Sem fld nm a
-prj# = \nm rcd -> prjAt (Idx.idx# nm (row# rcd)) rcd
+prj# :: forall {nm} {rho} {fld} {a}. KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
+prj# = \nm rcd -> prjAt (Idx.idx# nm (proxy# @rho)) rcd
 
 -----
 
@@ -159,14 +157,12 @@ wkn# :: KnownLT nm rho => Proxy# nm -> (Vrt fld (rho :& nm := a) -> ans) -> (Vrt
 wkn# = \nm f (Vrt idx x) -> f $ Vrt (Idx.wdn# nm idx) x
 
 -- | Inject a value into the variant
-inj# :: (KnownLT nm rho, Found a ~ Find nm rho) => Proxy# nm -> Sem fld nm a -> Vrt fld rho
+inj# :: forall {nm} {rho} {fld} {a}. KnownLT nm rho => Proxy# nm -> Sem fld nm a -> Vrt fld (rho :& nm := a)
 inj# = \nm a ->
-    let idx = Idx.idx# nm (row# vrt)
-        vrt = injAt idx a
+    let idx = Idx.idx# nm (proxy# @rho)
     in
-    vrt
+    injAt idx a
 
--- inj# :: KnownLT nm (rho :& nm := a) => Proxy# nm -> Sem fld nm a -> Vrt fld (rho :& nm := a)
 
 -----
 

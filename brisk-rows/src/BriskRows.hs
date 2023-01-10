@@ -6,10 +6,6 @@ module BriskRows (
     ROW (Emp),
     -- ** Constructors
     (:&),
-    -- ** Queries
-    Find,
-    FindResult (Found, NoSuchColumn),
-    Select,
     -- ** Constraints
     AllCols,
     Absent,

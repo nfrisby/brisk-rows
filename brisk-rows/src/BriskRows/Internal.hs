@@ -26,10 +26,6 @@ module BriskRows.Internal (
     ROW (Emp),
     -- ** Constructors
     (:&),
-    -- ** Queries
-    Find,
-    FindResult (Found, NoSuchColumn),
-    Select,
     -- ** Constraints
     Absent,
     AllCols (anyDicts#),
@@ -44,11 +40,9 @@ module BriskRows.Internal (
     ShowName (docName),
     docName#,
     -- * Auxiliary
-    Extend_Col,
     Err,
     NoErr,
     TypeErr,
-    UnfoldExtOp,
     castAllCols,
     givenAllCols1,
     givenAllCols2,
@@ -56,15 +50,6 @@ module BriskRows.Internal (
     uncastAllCols,
     wantedKnownLT,
     wantedAllCols,
-    -- * blarg
-    AbstractROW,
-    AbstractCOL,
-    Extend_Row#,
-    Restrict,
-    Cons,
-    NotAbsent,
-    NotFound,
-    Incomparable,
     ) where
 
 import           Data.Kind (Constraint, Type)
@@ -76,7 +61,7 @@ import           GHC.Exts (Any, Proxy#, proxy#)
 import           GHC.Prim (Int#, (+#), (-#))
 import           GHC.Tuple (Solo (Solo))
 import           GHC.Types (Int (I#))
-import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType), TypeError)
+import           GHC.TypeLits (ErrorMessage (Text), TypeError)
 import           GHC.TypeLits (Natural, Symbol)
 import qualified GHC.TypeLits as TypeLits
 import           Unsafe.Coerce (unsafeCoerce)
@@ -95,21 +80,6 @@ type family NoErr :: Err where {}
 
 -- This indirection is enough to disarm the errors while GHC compiles this module
 type family TypeErr (err :: ErrorMessage) :: Err where TypeErr err = TypeError err
-
------
------ specific error messages for code in this module
------
-
-type Incomparable (nm :: k) (x :: k) =
-    Text "These names are incomparable! " :$$: (Text "        " :<>: ShowType nm) :$$: (Text "    and " :<>: ShowType x)
-
-type NotFound (nm :: k) = Text "This column is not in the row! " :<>: ShowType nm
-
-type NotAbsent (nm :: k) = Text "This column is not absent in the row! " :<>: ShowType nm
-
-type AbstractROW (rho :: ROW k v) = Text "Equality constraints with row type variables are disallowed! " :<>: ShowType rho
-
-type AbstractCOL (col :: COL k v) = Text "This column is not concrete! " :<>: ShowType col
 
 -----
 
@@ -141,24 +111,8 @@ type family CmpName (l :: k) (r :: k) :: NameOrdering
 
 -- | The kind of a row type
 data ROW (k :: Type) (v :: Type) =
-  -- | The empty row
-  Emp
-{-
-    -- | INVARIANT Non-descending, according to 'CmpName'
-    --
-    -- Of multiple columns with the same name, the outermost is the most
-    -- recently added. See 'Lacks'.
-    Row# [COL k v]
--}
-
-type family Cons
-    (  nm :: k       )
-    (   a :: v       )
-    ( rho :: ROW k v )
-          :: ROW k v
-  where
-    {}
---    Cons nm a (Row# cols) = Row# (nm := a ': cols)
+    -- | The empty row
+    Emp
 
 class ShowName (nm :: k) where
     docName :: proxy nm -> PP.Doc
@@ -342,41 +296,7 @@ instance KnownLT nm Emp
   where
     knownLT# = \_nm _rho -> 0#
 
-{-
-instance
-    KnownLT_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm cols
- => KnownLT nm (Row# (x := b ': cols))
-  where
-    knownLT# = \nm _rho ->
-        knownLT_Ordering
-          (proxy# @(TypeErr (Incomparable nm x)))
-          (proxy# @(CmpName nm x))
-          nm
-          (proxy# @cols)
-
-class
-    KnownLT_Ordering
-      (  err :: Err       )
-      (    o :: Ordering  )
-      (   nm :: k         )
-      ( cols :: [COL k v] )
-  where
-    knownLT_Ordering :: Proxy# err -> Proxy# o -> Proxy# nm -> Proxy# cols -> Int#
-
-instance KnownLT_Ordering err LT nm cols
-  where
-    knownLT_Ordering = \_err _o _nm _cols -> 0#
-
-instance KnownLT_Ordering err EQ nm cols
-  where
-    knownLT_Ordering = \_err _o _nm _cols -> 0#
-
-instance
-    KnownLT nm (Row# cols)
- => KnownLT_Ordering err GT nm cols
-  where
-    knownLT_Ordering = \_err _o nm _cols -> 1# +# knownLT# nm (proxy# @(Row# cols))
--}
+-----
 
 -- | More data enabling methods on records, variants, etc
 --
@@ -389,13 +309,7 @@ class KnownLen (rho :: ROW k v)
 instance KnownLen Emp
   where
     knownLen# = \_rho -> 0#
-{-
-instance
-    KnownLen (Row# cols)
- => KnownLen (Row# (x := b ': cols))
-  where
-    knownLen# = \_rho -> 1# +# knownLen# (proxy# @(Row# cols))
--}
+
 -----
 
 -- | The traditional row polymorphism constraint
@@ -417,136 +331,12 @@ class Absent (nm :: k) (rho :: ROW k v)
 
 instance Absent nm Emp
 
-{-
-instance
-    Absent_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm cols
- => Absent nm (Row# (x := b ': cols))
-
-class Absent_Ordering (err :: Err) (o :: Ordering) (nm :: k) (cols :: [COL k v])
-
-instance Absent_Ordering err LT nm cols
-
-instance TypeError (NotAbsent nm) => Absent_Ordering err EQ nm cols
-
-instance Absent nm (Row# cols) => Absent_Ordering err GT nm cols
--}
------
-
-type family Extend_Col (err :: Err) (col :: COL k v) (rho :: ROW k v) :: ROW k v
-  where
-    {}
---    Extend_Col err (nm := a) rho = Extend_Row# nm a rho (TypeErr (AbstractROW rho))
-
--- We intentionally put the @err@ argument after the @rho@ argument, so that GHC renders the deeper error
-type family Extend_Row#
-    (  nm :: k       )
-    (   a :: v       )
-    ( rho :: ROW k v )
-    ( err :: Err     )
-          :: ROW k v
-  where
-    {}
-{-    Extend_Row# nm a (Row# '[]             ) err = Row# '[nm := a]
-    Extend_Row# nm a (Row# (x := b ': cols)) err = Extend_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm a x b cols
-
-type family Extend_Ordering
-    (  err :: Err       )
-    (    o :: Ordering  )
-    (   nm :: (k :: Type))
-    (    a :: v         )
-    (    x :: k         )
-    (    b :: v         )
-    ( cols :: [COL k v] )
-           :: ROW k v
-  where
-    Extend_Ordering err LT nm a x b cols = Cons nm a (Cons x b (Row# cols))
-    Extend_Ordering err EQ nm a x b cols = Cons nm a (Cons x b (Row# cols))
-    Extend_Ordering err GT nm a x b cols = Cons x b (Extend_Row# nm a (Row# cols) NoErr)
--}
------
-
--- | Restriction is essentially an implementation detail of the typechecker
--- plugin, not exposed to the user
-type family Restrict (nm :: k) (rho :: ROW k v) :: ROW k v
-  where
-    {}
---    Restrict nm (Row# '[]             ) = TypeError (NotFound nm)
---    Restrict nm (Row# (x := b ': cols)) = Restrict_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
-{-
-type family Restrict_Ordering
-    (  err :: Err       )
-    (    o :: Ordering  )
-    (   nm :: k         )
-    (    x :: k         )
-    (    b :: v         )
-    ( cols :: [COL k v] )
-           :: ROW k v
-  where
-    Restrict_Ordering err LT nm x b cols = TypeError (NotFound nm)
-    Restrict_Ordering err EQ nm x b cols = Row# cols
-    Restrict_Ordering err GT nm x b cols = Cons x b (Restrict nm (Row# cols))
--}
------
-
--- | The image of this name in the row
---
--- If multiple columns have the same name, it returns the outermost.
---
--- TODO does this encourage subtle bugs? Only use 'Find' instead?
-type family Select (nm :: k) (rho :: ROW k v) :: v
-  where
-    {}
-{-
-    Select nm (Row# '[]             ) = TypeError (NotFound nm)
-    Select nm (Row# (x := b ': cols)) = Select_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
-
-type family Select_Ordering
-    (  err :: Err       )
-    (    o :: Ordering  )
-    (   nm :: k         )
-    (    x :: k         )
-    (    b :: v         )
-    ( cols :: [COL k v] )
-           :: v
-  where
-    Select_Ordering err LT nm x b cols = TypeError (NotFound nm)
-    Select_Ordering err EQ nm x b cols = b
-    Select_Ordering err GT nm x b cols = Select nm (Row# cols)
--}
------
-
-data FindResult k v = Found v | NoSuchColumn k
-
--- | The image of this name in the row, if any
---
--- If multiple columns have the same name, it returns the outermost.
-type family Find (nm :: k) (rho :: ROW k v) :: FindResult k v
-  where
-    {}
-{-
-    Find nm (Row# '[]             ) = NoSuchColumn nm
-    Find nm (Row# (x := b ': cols)) = Find_Ordering (TypeErr (Incomparable nm x)) (CmpName nm x) nm x b cols
-
-type family Find_Ordering
-    (  err :: Err       )
-    (    o :: Ordering  )
-    (   nm :: k         )
-    (    x :: k         )
-    (    b :: v         )
-    ( cols :: [COL k v] )
-           :: FindResult k v
-  where
-    Find_Ordering err LT nm x b cols = NoSuchColumn nm
-    Find_Ordering err EQ nm x b cols = Found b
-    Find_Ordering err GT nm x b cols = Find nm (Row# cols)
--}
 -----
 
 infixl 5 :&
 
 -- | Extend the row by inserting the given column
 type family (:&) (rho :: ROW k v) (col :: COL k v) :: ROW k v where {}
-type UnfoldExtOp rho               col              = rho :& col -- Extend_Col (TypeErr (AbstractCOL col)) col rho
 
 -----
 

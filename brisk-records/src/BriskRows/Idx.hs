@@ -14,7 +14,6 @@ module BriskRows.Idx (
   Idx (Idx),
   compareIdx,
   idx#,
-  idx1#,
   idxInt,
   nrw#,
   wdn#,
@@ -60,19 +59,11 @@ compareIdx (Idx l) (Idx r) = case compare l r of
     GT -> GT'
 
 -- | The index of the outermost column with the given name
-idx1# ::
+idx# ::
      KnownLT nm rho
   => Proxy# nm
   -> Proxy# rho
   -> Idx nm a (rho :& nm := a)
-idx1# = \nm rho -> Idx $ knownLT nm rho
-
--- | The index of the outermost column with the given name
-idx# ::
-     (KnownLT nm rho, Found a ~ Find nm rho)
-  => Proxy# nm
-  -> Proxy# rho
-  -> Idx nm a rho
 idx# = \nm rho -> Idx $ knownLT nm rho
 
 -- | Widen the row
