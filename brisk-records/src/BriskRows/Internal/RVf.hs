@@ -107,7 +107,7 @@ lacking# = RVtf.lacking#
 
 -----
 
-pur# :: forall fld {rho}. RVtf.AllCols (Sem.Con Sem.CTop) rho => Proxy# fld -> (forall nm a. fld nm a) -> Rcd fld rho
+pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. fld nm a) -> Rcd fld rho
 pur# = \_fld f -> Rcd $ RVtf.pur# (proxy# @(Sem.Con fld `Sem.App` Sem.Nam `Sem.App` Sem.Img)) (\_nm _a -> f)
 
 -----

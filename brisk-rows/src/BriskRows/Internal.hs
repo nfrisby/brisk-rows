@@ -47,8 +47,10 @@ module BriskRows.Internal (
     givenAllCols1,
     givenAllCols2,
     givenKnownLT,
+    givenKnownLen,
     uncastAllCols,
     wantedKnownLT,
+    wantedKnownLen,
     wantedAllCols,
     ) where
 
@@ -307,6 +309,22 @@ class KnownLen (rho :: ROW k v)
   where
     -- | The number of columns in the row
     knownLen# :: Proxy# rho -> Int#
+
+givenKnownLen ::
+  forall k v (rho :: ROW k v) (rho' :: ROW k v).
+     Int#
+  -> (Proxy# rho -> Int#)
+  -> (Proxy# rho' -> Int#)
+{-# INLINE givenKnownLen #-}
+givenKnownLen i# older = \_rho -> older proxy# -# i#
+
+wantedKnownLen ::
+  forall k v (rho' :: ROW k v) (rho :: ROW k v).
+     Int#
+  -> (Proxy# rho' -> Int#)
+  -> (Proxy# rho -> Int#)
+{-# INLINE wantedKnownLen #-}
+wantedKnownLen i# newer = \_rho -> newer proxy# +# i#
 
 instance KnownLen Emp
   where

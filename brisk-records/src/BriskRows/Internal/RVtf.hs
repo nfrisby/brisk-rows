@@ -103,32 +103,18 @@ prj# = \nm rcd -> prjAt (Idx.idx# nm (proxy# @rho)) rcd
 
 -----
 
-{-
-class KnownLen rho => AllCols (c :: Fld k v Constraint) (rho :: ROW k v)
-  where
-    dicts# :: Proxy# c -> Rcd (Con Dict `App` c) rho
-
-instance AllCols c (Row# '[]) where dicts# = \_c -> emp
-
-instance (Sem c nm a, AllCols c (Row# cols)) => AllCols c (Row# (nm := a ': cols)) where
-  dicts# = \_c ->
-      let Rcd# sq = dicts# proxy# :: Rcd (Con Dict `App` c) (Row# cols)
-      in Rcd# $ unsafeCoerce (Dict :: Dict (Sem c nm a)) Sq.<| sq
--}
-
 dicts# :: forall k v (c :: Fld k v Constraint) {rho :: ROW k v}.
      AllCols c rho
   => Proxy# c
   -> Rcd (Con Dict `App` c) rho
 dicts# c = Rcd# $ anyDicts# c (proxy# @rho)
 
-pur# :: forall fld {rho}. AllCols (Con CTop) rho => Proxy# fld -> (forall nm a. Proxy# nm -> Proxy# a -> Sem fld nm a) -> Rcd fld rho
-pur# = \fld f ->
-    natro#
-        (proxy# @(Con Dict `App` Con CTop))
-        fld
-        (\nm a _dict -> f nm a)
-        (dicts# (proxy# @(Con CTop)))
+pur# :: forall fld {rho}. KnownLen rho => Proxy# fld -> (forall nm a. Proxy# nm -> Proxy# a -> Sem fld nm a) -> Rcd fld rho
+pur# = \_fld f ->
+    Rcd#
+  $ Sq.replicate
+        (I# (knownLen# (proxy# @rho)))
+        (unsafeCoerce (f proxy# proxy#))
 
 -----
 

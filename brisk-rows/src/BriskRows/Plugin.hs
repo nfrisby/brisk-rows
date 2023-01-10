@@ -194,59 +194,68 @@ lookupDC tc s = case dcs of
 -----
 
 data Env = Env {
-    doTrace          :: GhcPlugins.SDoc -> TcPluginM ()
+    doTrace           :: GhcPlugins.SDoc -> TcPluginM ()
   ,
-    doTrace_         :: forall a. GhcPlugins.SDoc -> a -> a
+    doTrace_          :: forall a. GhcPlugins.SDoc -> a -> a
   ,
-    envAllCols       :: !Class
-  ,
-    -- | Coercion from KnownLT to its method type at the given @k@, @v@, @nm@, and @rho@.
-    envAllColsCo     :: !(TcKind -> TcKind -> TcType -> TcType -> TyCoRep.Coercion)
-  ,
-    envApart         :: !TyCon
-  ,
-    envAssign        :: !TyCon
-  ,
-    envCastAllCols   :: !GhcPlugins.Id
-  ,
-    envCmpName       :: !TyCon
-  ,
-    envDict          :: !TyCon
-  ,
-    envDictCon       :: !GhcPlugins.DataCon
-  ,
-    envEQ            :: !TyCon
-  ,
-    envEmp           :: !TyCon
-  ,
-    envExtOp         :: !TyCon
-  ,
-    envGT            :: !TyCon
-  ,
-    envGivenAllCols1 :: !GhcPlugins.Id
-  ,
-    envGivenAllCols2 :: !GhcPlugins.Id
-  ,
-    envGivenKnownLT  :: !GhcPlugins.Id
-  ,
-    envKnownLT       :: !Class
+    envAllCols        :: !Class
   ,
     -- | Coercion from KnownLT to its method type at the given @k@, @v@, @nm@, and @rho@.
-    envKnownLTCo     :: !(TcKind -> TcKind -> TcType -> TcType -> TyCoRep.Coercion)
+    envAllColsCo      :: !(TcKind -> TcKind -> TcType -> TcType -> TyCoRep.Coercion)
   ,
-    envLT            :: !TyCon
+    envApart          :: !TyCon
   ,
-    envPlatform      :: !Platform
+    envAssign         :: !TyCon
   ,
-    envROW           :: !TyCon
+    envCastAllCols    :: !GhcPlugins.Id
   ,
-    envSem           :: !TyCon
+    envCmpName        :: !TyCon
   ,
-    envUncastAllCols :: !GhcPlugins.Id
+    envDict           :: !TyCon
   ,
-    envWantedAllCols :: !GhcPlugins.Id
+    envDictCon        :: !GhcPlugins.DataCon
   ,
-    envWantedKnownLT :: !GhcPlugins.Id
+    envEQ             :: !TyCon
+  ,
+    envEmp            :: !TyCon
+  ,
+    envExtOp          :: !TyCon
+  ,
+    envGT             :: !TyCon
+  ,
+    envGivenAllCols1  :: !GhcPlugins.Id
+  ,
+    envGivenAllCols2  :: !GhcPlugins.Id
+  ,
+    envGivenKnownLT   :: !GhcPlugins.Id
+  ,
+    envGivenKnownLen  :: !GhcPlugins.Id
+  ,
+    envKnownLT        :: !Class
+  ,
+    -- | Coercion from KnownLT to its method type at the given @k@, @v@, @nm@, and @rho@.
+    envKnownLTCo      :: !(TcKind -> TcKind -> TcType -> TcType -> TyCoRep.Coercion)
+  ,
+    envKnownLen       :: !Class
+  ,
+    -- | Coercion from KnownLen to its method type at the given @k@, @v@, and @rho@.
+    envKnownLenCo     :: !(TcKind -> TcKind -> TcType -> TyCoRep.Coercion)
+  ,
+    envLT             :: !TyCon
+  ,
+    envPlatform       :: !Platform
+  ,
+    envROW            :: !TyCon
+  ,
+    envSem            :: !TyCon
+  ,
+    envUncastAllCols  :: !GhcPlugins.Id
+  ,
+    envWantedAllCols  :: !GhcPlugins.Id
+  ,
+    envWantedKnownLT  :: !GhcPlugins.Id
+  ,
+    envWantedKnownLen :: !GhcPlugins.Id
   }
 
 newEnv :: TcPluginM Env
@@ -293,6 +302,7 @@ newEnv = do
     envGivenAllCols1 <- lookupId modul "givenAllCols1"
     envGivenAllCols2 <- lookupId modul "givenAllCols2"
     envGivenKnownLT  <- lookupId modul "givenKnownLT"
+    envGivenKnownLen <- lookupId modul "givenKnownLen"
 
     envKnownLT <- TyCon.tyConClass_maybe <$> luTC "KnownLT" >>= \case
         Just cls -> pure cls
@@ -300,6 +310,14 @@ newEnv = do
 
     envKnownLTCo <- case TyCon.unwrapNewTyCon_maybe (classTyCon envKnownLT) of
         Just (_tvs, _rhs, coax) -> pure $ \k v x rho -> TcEvidence.mkTcUnbranchedAxInstCo coax [k, v, x, rho] []
+        Nothing                 -> panicDoc "Plugin.BriskRows could not treat KnownLT as a newtype" (text "")
+
+    envKnownLen <- TyCon.tyConClass_maybe <$> luTC "KnownLen" >>= \case
+        Just cls -> pure cls
+        Nothing  -> panicDoc "Plugin.BriskRows could not find the KnownLen class" (text "")
+
+    envKnownLenCo <- case TyCon.unwrapNewTyCon_maybe (classTyCon envKnownLen) of
+        Just (_tvs, _rhs, coax) -> pure $ \k v rho -> TcEvidence.mkTcUnbranchedAxInstCo coax [k, v, rho] []
         Nothing                 -> panicDoc "Plugin.BriskRows could not treat KnownLT as a newtype" (text "")
 
     envPlatform <- TcPluginM.getTargetPlatform
@@ -310,8 +328,9 @@ newEnv = do
 
     envUncastAllCols <- lookupId modul "uncastAllCols"
 
-    envWantedAllCols <- lookupId modul "wantedAllCols"
-    envWantedKnownLT <- lookupId modul "wantedKnownLT"
+    envWantedAllCols  <- lookupId modul "wantedAllCols"
+    envWantedKnownLT  <- lookupId modul "wantedKnownLT"
+    envWantedKnownLen <- lookupId modul "wantedKnownLen"
 
     pure Env{
               doTrace  = \x -> {- asTypeOf (pure ()) $ -} TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
@@ -483,6 +502,9 @@ data NewDictRecipe =
     -- | @old k v x rho i rho'@
     NewKnownLTRecipe !Ct !TcKind !TcKind !TcType !TcType !Int !TcType
   |
+    -- | @old k v rho i rho'@
+    NewKnownLenRecipe !Ct !TcKind !TcKind !TcType !Int !TcType
+  |
     -- | @old k v c rho extracts rho'@
     --
     -- The leftmost extract was the outermost extension.
@@ -492,8 +514,9 @@ data NewDictRecipe =
     NewAllColsRecipe !Ct !TcKind !TcKind !TcType !TcType [(TcType, TcType, KnownLtInt)] !TcType
 
 instance GhcPlugins.Outputable NewDictRecipe where
-  ppr (NewKnownLTRecipe old k v x rho i        rho') = text "NewKnownLTRecipe" <+> ppr (old, k, v, x, rho, i, rho')
-  ppr (NewAllColsRecipe old k v c rho extracts rho') = text "NewAllColsRecipe" <+> ppr (old, k, v, c, rho, extracts, rho')
+  ppr (NewKnownLTRecipe  old k v x rho i        rho') = text "NewKnownLTRecipe"  <+> ppr (old, k, v, x, rho, i,        rho')
+  ppr (NewKnownLenRecipe old k v   rho i        rho') = text "NewKnownLenRecipe" <+> ppr (old, k, v,    rho, i,        rho')
+  ppr (NewAllColsRecipe  old k v c rho extracts rho') = text "NewAllColsRecipe"  <+> ppr (old, k, v, c, rho, extracts, rho')
 
 simplifyDict :: Env -> FamInstEnvs -> RowVarLTs -> Ct -> Maybe NewDictRecipe
 simplifyDict env famInstEnvs gidx ct = case ct of
@@ -504,6 +527,11 @@ simplifyDict env famInstEnvs gidx ct = case ct of
       , Just ext <- getExtend env rho
       -> goKnownLT x ext <&> \(i, rho') -> NewKnownLTRecipe ct k v x rho i rho'
 
+      | cc_class == envKnownLen
+      , [k, v, rho] <- cc_tyargs
+      , Just ext <- getExtend env rho
+      -> Just $ let (rho', i) = goKnownLen ext in NewKnownLenRecipe ct k v rho i rho'
+
       | cc_class == envAllCols
       , [k, v, c, rho] <- cc_tyargs
       , Just ext <- getExtend env rho
@@ -512,7 +540,7 @@ simplifyDict env famInstEnvs gidx ct = case ct of
 
     _ -> Nothing
   where
-    Env{envAllCols, envExtOp, envKnownLT} = env
+    Env{envAllCols, envExtOp, envKnownLT, envKnownLen} = env
 
     goKnownLT :: TcType -> Extension -> Maybe (Int, TcType)
     goKnownLT x ext = ($ recu) $ case cmp env famInstEnvs x nm of
@@ -534,6 +562,14 @@ simplifyDict env famInstEnvs gidx ct = case ct of
         keep = \case
             Nothing        -> Nothing
             Just (i, root) -> Just (i + 1, TcType.mkTyConApp envExtOp [k, v, root, nm, a])
+
+    goKnownLen :: Extension -> (TcType, Int)
+    goKnownLen ext =
+        (+1) <$> case getExtend env rho of
+            Nothing   -> (rho, 0)
+            Just rho' -> goKnownLen rho'
+      where
+        Extend _k _v _nm _a rho = ext
 
     goAllCols ::
          TcKind
@@ -665,6 +701,38 @@ newDict env evBindsVar = \case
                      (`GhcPlugins.mkCast` GhcPlugins.mkSymCo (envKnownLTCo k v x rho))
                    $ (\newer -> TcEvidence.evId envWantedKnownLT `Core.mkTyApps` [k, v, x, rho', rho] `mkCoreApps` [Core.mkIntLit envPlatform (toInteger i), newer])
                    $ (`GhcPlugins.mkCast` envKnownLTCo k v x rho')
+                   $ Ct.ctEvExpr new
+
+            pure ((TcEvidence.EvExpr ev, old), [Ct.mkNonCanonical new])
+
+    NewKnownLenRecipe old k v rho i rho' -> case Ct.ctEvidence old of
+        Ct.CtGiven{} -> do
+            let Env{envGivenKnownLen, envKnownLen, envKnownLenCo, envPlatform} = env
+
+            new <- do
+                let loc = Ct.ctLoc old
+                let ty  = TcType.mkTyConApp (classTyCon envKnownLen) [k, v, rho']
+                TcPluginM.newGiven evBindsVar loc ty $
+                     (`GhcPlugins.mkCast` GhcPlugins.mkSymCo (envKnownLenCo k v rho'))
+                   $ (\older -> TcEvidence.evId envGivenKnownLen `Core.mkTyApps` [k, v, rho, rho'] `mkCoreApps` [Core.mkIntLit envPlatform (toInteger i), older])
+                   $ (`GhcPlugins.mkCast` envKnownLenCo k v rho)
+                   $ Ct.ctEvExpr (Ct.ctEvidence old)
+
+            -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
+            let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
+            pure ((evtm, old), [Ct.mkNonCanonical new])
+        Ct.CtWanted{} -> do
+            let Env{envKnownLen, envKnownLenCo, envPlatform, envWantedKnownLen} = env
+
+            new <- do
+                let loc = Ct.ctLoc old
+                let ty  = TcType.mkTyConApp (classTyCon envKnownLen) [k, v, rho']
+                TcPluginM.newWanted loc ty
+
+            let ev =
+                     (`GhcPlugins.mkCast` GhcPlugins.mkSymCo (envKnownLenCo k v rho))
+                   $ (\newer -> TcEvidence.evId envWantedKnownLen `Core.mkTyApps` [k, v, rho', rho] `mkCoreApps` [Core.mkIntLit envPlatform (toInteger i), newer])
+                   $ (`GhcPlugins.mkCast` envKnownLenCo k v rho')
                    $ Ct.ctEvExpr new
 
             pure ((TcEvidence.EvExpr ev, old), [Ct.mkNonCanonical new])
