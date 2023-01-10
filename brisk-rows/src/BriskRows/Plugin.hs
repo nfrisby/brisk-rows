@@ -12,7 +12,7 @@ module BriskRows.Plugin (plugin) where
 
 import           Debug.Trace (trace)
 
-import           Control.Monad (foldM, guard)
+import           Control.Monad (ap, foldM, guard)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Functor ((<&>))
@@ -88,13 +88,16 @@ plugin = GhcPlugins.defaultPlugin
             doTrace env $ text $ "\n\n\n==========TABLE\n"
             doTrace env $ let RowVarLTs m = gidx in ppr $ Map.toList $ Map.map Map.keys m
 
-            let recipes = mapMaybe (improve env famInstEnvs) cts
+            let (eq_contras, recipes) = mapStep (improve env famInstEnvs) cts
 
             doTrace env $ text $ "\n\n\n==========EQ RECIPES\n"
             doTrace env $ ppr recipes
 
             doTrace env $ text $ "\n\n\n==========NEW EQS\n"
             newEqs <- mapM (newEq env evBindsVar) recipes
+
+            doTrace env $ text $ "\n\n\n==========CONTRADICTIONS\n"
+            doTrace env $ ppr eq_contras
 
             let dictRecipes = mapMaybe (simplifyDict env famInstEnvs gidx) cts
             doTrace env $ text $ "\n\n\n==========DICT RECIPES\n"
@@ -103,7 +106,13 @@ plugin = GhcPlugins.defaultPlugin
             doTrace env $ text $ "\n\n\n==========NEW DICTS\n"
             (solvedDicts, newDictss) <- fmap unzip $ mapM (newDict env evBindsVar) dictRecipes
 
-            pure $ TcPluginOk (map oldEq recipes <> solvedDicts) (concat newEqs <> concat newDictss)
+            pure TcPluginSolveResult {
+                tcPluginInsolubleCts = eq_contras
+              ,
+                tcPluginSolvedCts    = map oldEq recipes <> solvedDicts
+              ,
+                tcPluginNewCts       = concat newEqs <> concat newDictss
+              }
       }
   }
 
@@ -758,6 +767,33 @@ mkUncastAllCols env k v c rho evex =
 
 -----
 
+mapStep :: (a -> Step b) -> [a] -> ([a], [b])
+mapStep f =
+    go [] []
+  where
+    go contras steps = \case
+        []   -> (contras, steps)
+        x:xs -> case f x of
+            Contra -> go (x : contras)      steps  xs
+            NoStep -> go      contras       steps  xs
+            Step y -> go      contras  (y : steps) xs
+
+data Step a = Contra | NoStep | Step a
+
+instance Functor Step where
+  fmap f = \case
+      Contra -> Contra
+      NoStep -> NoStep
+      Step a -> Step (f a)
+instance Applicative Step where
+  pure  = Step
+  (<*>) = ap
+instance Monad Step where
+  x >>= k = case x of
+      Contra -> Contra
+      NoStep -> NoStep
+      Step a -> k a
+
 -- | The domain-specific knowledge
 --
 -- This plugin does not implement any interactions, so we simplify each constraint individually.
@@ -773,20 +809,20 @@ mkUncastAllCols env k v c rho evex =
 -- > l :& nm := a ~ r :& nm := a   implies/requires   l ~ r
 --
 -- > rho :& x := a :& y := b :& ... ~ Row# cols   implies/requires   rho ~ Row# cols :# y :# x, b ~ Select y ..., a ~ Select x ...
-improve :: Env -> FamInstEnvs -> Ct -> Maybe NewEqRecipe
+improve :: Env -> FamInstEnvs -> Ct -> Step NewEqRecipe
 improve env famInstEnvs ct = case ct of
     Ct.CNonCanonical{}
       | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe (Ct.ctPred ct)
       -> go lhs rhs
-    _ -> Nothing
+    _ -> NoStep
   where
     go lhs rhs = case (getExtend env lhs, getExtend env rhs) of
-        (Nothing,   Nothing  ) -> Nothing
-        (Just{},    Nothing  ) -> if isEmp env rhs then Just $ error "contra" else Nothing
-        (Nothing,   Just{}   ) -> if isEmp env lhs then Just $ error "contra" else Nothing
+        (Nothing,   Nothing  ) -> NoStep
+        (Just{},    Nothing  ) -> if isEmp env rhs then Contra else NoStep
+        (Nothing,   Just{}   ) -> if isEmp env lhs then Contra else NoStep
         (Just lext, Just rext) ->
             -- wait for kinds to match
-            if not (sameKinds lext rext) then Nothing else
+            if not (sameKinds lext rext) then NoStep else
             NewEqRecipe ct (OldEquality lhs rhs) <$> isRearranged env famInstEnvs lext rext
 
     sameKinds :: Extension -> Extension -> Bool
@@ -845,7 +881,7 @@ len (Extends xs) = length xs
 -- the replication of a single name, (b) the roots are matched or at least one
 -- is 'Emp', and (c) the extensions are the same length, then unify the columns
 -- via a zip and also unify the roots.
-isRearranged :: Env -> FamInstEnvs -> Extension -> Extension -> Maybe [NewEquality]
+isRearranged :: Env -> FamInstEnvs -> Extension -> Extension -> Step [NewEquality]
 isRearranged env famInstEnvs lext rext =
     go [] lexts0 [] rassocs0
   where
@@ -864,10 +900,10 @@ isRearranged env famInstEnvs lext rext =
             Just (la, lexts') -> go (NewEquality la (snd r) : neweqs) lexts'     rmisses  rs
         []
             | isEmp env rroot, length rmisses < len lexts
-            -> error "contradiction"
+            -> Contra
 
             | isEmp env lroot, len lexts < length rmisses
-            -> error "contradiction"
+            -> Contra
 
             -- If the roots match, all the remaining rights are equal and the
             -- same length as the remaining lefts, then all the names must be
@@ -876,20 +912,20 @@ isRearranged env famInstEnvs lext rext =
             , Just (rnm, ras) <- checkMono env famInstEnvs rmisses
             , let Extends xs = lexts
             , Just acc <- zipper neweqs (\acc (lnm, la) ra -> NewEquality lnm rnm : NewEquality la ra : acc) xs ras
-            -> Just $ if same then acc else NewEquality lroot rroot : acc
+            -> Step $ if same then acc else NewEquality lroot rroot : acc
 
             -- ditto, reflected
             | let Extends xs = lexts
             , matched
             , Just (lnm, las) <- checkMono env famInstEnvs xs
             , Just acc <- zipper neweqs (\acc la (rnm, ra) -> NewEquality lnm rnm : NewEquality la ra : acc) las rmisses
-            -> Just $ if same then acc else NewEquality lroot rroot : acc
+            -> Step $ if same then acc else NewEquality lroot rroot : acc
 
             | null neweqs
-            -> Nothing
+            -> NoStep
 
             | otherwise
-            -> Just $
+            -> Step $
                   NewEquality (mkExtensions env lk lv lroot lexts)
                               (mkExtensions env rk rv rroot (Extends (reverse rmisses)))
                 : neweqs
