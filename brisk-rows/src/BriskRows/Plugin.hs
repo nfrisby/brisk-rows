@@ -1,5 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE KindSignatures #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE Rank2Types #-}
@@ -13,6 +15,7 @@ module BriskRows.Plugin (plugin) where
 import           Debug.Trace (trace)
 
 import           Control.Monad (ap, foldM, guard)
+import           Data.Coerce (coerce)
 import           Data.Functor ((<&>))
 import qualified Data.List.NonEmpty as NE
 import           Data.Map (Map)
@@ -427,20 +430,17 @@ isEmp Env{envEmp} ty = case TcType.tcSplitTyConApp_maybe ty of
     Just (tc, [_k, _v]) -> envEmp == tc
     _                   -> False
 
--- | Leftmost becomes outermost
-mkExtensions :: Env -> TcKind -> TcKind -> TcType -> Extensions -> TcType
+mkExtensions :: Env -> TcKind -> TcKind -> TcType -> Extensions Outermost -> TcType
 mkExtensions env k v root exts =
-    case assocs of
-        []                -> root
-        (nm, a) : assocs' ->
+    case unconsE exts of
+        Nothing             -> root
+        Just (nm, a, exts') ->
             let asn   = TcType.mkTyConApp envAssign [k, v, nm, a]
-                inner = mkExtensions env k v root (Extends assocs')
+                inner = mkExtensions env k v root exts'
             in
             TcType.mkTyConApp envExtOp [k, v, inner, asn]
   where
     Env{envAssign, envExtOp} = env
-
-    Extends assocs = exts
 
 mkAbsent :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
 mkAbsent env k v nm rho =
@@ -646,16 +646,14 @@ data NewDictRecipe =
   |
     -- | @old k v c rho extracts rho'@
     --
-    -- The leftmost extract was the outermost extension.
-    --
     -- The extracts are the columns that have a decided order wrt every other
     -- column in the row and an in-scope 'KnownLT' wrt to the row's root.
-    NewAllColsRecipe !Ct !TcKind !TcKind !TcType !TcType [(TcType, TcType, KnownLtInt)] !TcType
+    NewAllColsRecipe !Ct !TcKind !TcKind !TcType !TcType (DirectedList Innermost (TcType, TcType, KnownLtInt)) !TcType
 
 instance GhcPlugins.Outputable NewDictRecipe where
-  ppr (NewKnownLTRecipe  old k v x rho i        rho') = text "NewKnownLTRecipe"  <+> ppr (old, k, v, x, rho, i,        rho')
-  ppr (NewKnownLenRecipe old k v   rho i        rho') = text "NewKnownLenRecipe" <+> ppr (old, k, v,    rho, i,        rho')
-  ppr (NewAllColsRecipe  old k v c rho extracts rho') = text "NewAllColsRecipe"  <+> ppr (old, k, v, c, rho, extracts, rho')
+  ppr (NewKnownLTRecipe  old k v x rho i        rho') = text "NewKnownLTRecipe"  <+> ppr (old, k, v, x, rho, i,                           rho')
+  ppr (NewKnownLenRecipe old k v   rho i        rho') = text "NewKnownLenRecipe" <+> ppr (old, k, v,    rho, i,                           rho')
+  ppr (NewAllColsRecipe  old k v c rho extracts rho') = text "NewAllColsRecipe"  <+> ppr (old, k, v, c, rho, forgetDirectedList extracts, rho')
 
 simplifyDict :: Env -> FamInstEnvs -> GivensIndex -> Ct -> Maybe NewDictRecipe
 simplifyDict env famInstEnvs gidx ct = case ct of
@@ -675,14 +673,14 @@ simplifyDict env famInstEnvs gidx ct = case ct of
       , [k, v, c, rho] <- cc_tyargs
       , Just ext <- getExtend env gidx rho
       , let (root, exts) = peel env gidx ext
-      -> goAllCols k v root [] [] exts <&> \(extracts, rho') -> NewAllColsRecipe ct k v c rho extracts rho'
+      -> goAllCols k v root nil nilE (revE exts) <&> \(extracts, rho') -> NewAllColsRecipe ct k v c rho extracts rho'
 
     _ -> Nothing
   where
     Env{envAllCols, envExtOp, envKnownLT, envKnownLen} = env
 
     goKnownLT :: TcType -> Extension -> Maybe (Int, TcType)
-    goKnownLT x ext = ($ recu) $ case cmp env famInstEnvs x nm of
+    goKnownLT x ext = ($ recu) $ case cmp env famInstEnvs nm x of
         Just o  -> Just . if LT == o then incr else skip
         Nothing -> keep
       where
@@ -714,27 +712,25 @@ simplifyDict env famInstEnvs gidx ct = case ct of
          TcKind
       -> TcKind
       -> TcType
-      -> [(TcType, TcType, KnownLtInt)]
-      -> [(TcType, TcType)]
-      -> Extensions
-      -> Maybe ([(TcType, TcType, KnownLtInt)], TcType)
-    goAllCols k v root hits misses exts =
-        case assocs of
-            [] -> if null hits then Nothing else Just (hits, mkExtensions env k v root (Extends (reverse misses)))
+      -> DirectedList Innermost (TcType, TcType, KnownLtInt)
+      -> Extensions Innermost
+      -> Extensions Outermost
+      -> Maybe (DirectedList Innermost (TcType, TcType, KnownLtInt), TcType)
+    goAllCols k v root hits misses =
+        (. unconsE) $ \case
+            Nothing -> if null (forgetDirectedList hits) then Nothing else Just (hits, mkExtensions env k v root (revE misses))
 
-            (nm, a) : assocs'
-              | Just evex <- knownLtRoot       env             gidx nm root
-              , Just i    <- knownLtExtensions env famInstEnvs fst  nm misses
+            Just (nm, a, exts)
+              | Just evex <- knownLtRoot   env             gidx nm root
+              , Just i    <- knownLtMisses env famInstEnvs      nm misses
               , not new_misses
-              -> goAllCols k v root ((nm, a, KnownLtInt i evex) : hits') misses' (Extends assocs')
+              -> goAllCols k v root (cons (nm, a, KnownLtInt i evex) hits') misses' exts
 
               | otherwise
-              -> goAllCols k v root hits' ((nm, a) : misses') (Extends assocs')
+              -> goAllCols k v root hits' (consE (nm, a) misses') exts
               where
                 (new_misses, misses', hits') = cmpPartition env famInstEnvs fst3 fstsnd3 bump nm misses hits
       where
-        Extends assocs = exts
-
         bump (nm, a, KnownLtInt i evex) = (nm, a, KnownLtInt (i+1) evex)
 
 -----
@@ -783,27 +779,41 @@ knownLtRoot env gidx nm root
 cmpPartition ::
      Env
   -> FamInstEnvs
+  -> (a -> TcType) -> (a -> (TcType,TcType)) -> (a -> a)
+  -> TcType
+  -> Extensions Innermost
+  -> DirectedList Innermost a
+  -> (Bool, Extensions Innermost, DirectedList Innermost a)
+cmpPartition env famInstEnvs prj cnv bump x (Extends misses) hits =
+    (new_misses, Extends misses', hits')
+  where
+    (new_misses, misses', hits') = cmpPartition_ env famInstEnvs prj cnv bump x misses hits
+
+cmpPartition_ ::
+     Env
+  -> FamInstEnvs
   -> (a -> TcType) -> (a -> b) -> (a -> a)
   -> TcType
-  -> [b] -> [a]
-  -> (Bool, [b], [a])
-cmpPartition env famInstEnvs prj cnv bump x misses0 =
-    go False misses0 []
+  -> DirectedList Innermost b
+  -> DirectedList Innermost a
+  -> (Bool, DirectedList Innermost b, DirectedList Innermost a)
+cmpPartition_ env famInstEnvs prj cnv bump x =
+    \misses hits -> go False misses (nil @Outermost) hits
   where
-    go flag misses hits = \case
-        []   -> (flag, misses, reverse hits)
-        y:ys -> case cmp env famInstEnvs x (prj y) of
-            Nothing -> go True (cnv y : misses)       hits  ys
+    go flag misses hits = (. uncons) $ \case
+        Nothing      -> (flag, misses, unrevDL hits)
+        Just (y, ys) -> case cmp env famInstEnvs x (prj y) of
+            Nothing -> go True (cnv y `cons` misses)          hits  ys
             Just LT -> let !y' = bump y in
-                       go flag          misses  (y' : hits) ys
-            Just EQ -> go flag          misses  (y  : hits) ys
-            Just GT -> go flag          misses  (y  : hits) ys
+                       go flag               misses  (cons y' hits) ys
+            Just EQ -> go flag               misses  (cons y  hits) ys
+            Just GT -> go flag               misses  (cons y  hits) ys
 
-knownLtExtensions :: Env -> FamInstEnvs -> (a -> TcType) -> TcType -> [a] -> Maybe Int
-knownLtExtensions env famInstEnvs prj x =
-    fmap sum . traverse each
+knownLtMisses :: Env -> FamInstEnvs -> TcType -> Extensions leftmost -> Maybe Int
+knownLtMisses env famInstEnvs x =
+    fmap sum . traverse each . forgetDirectedList . forgetExtensions
   where
-    each y = cmp env famInstEnvs x (prj y) <&> \case
+    each (miss_nm, _) = cmp env famInstEnvs miss_nm x <&> \case
         LT -> 1
         EQ -> 0
         GT -> 0
@@ -912,7 +922,7 @@ newDict env evBindsVar = \case
             (news, evex) <- foldM
                 snoc
                 ([], mkCastAllCols env k v c rho $ Ct.ctEvExpr $ Ct.ctEvidence old)
-                extracts
+                (forgetDirectedList $ revDL extracts `asTypeOf` nil @Outermost)
 
             new <- do
                 let loc = Ct.ctLoc old
@@ -947,10 +957,10 @@ newDict env evBindsVar = \case
             -- This processes the innermost extract first. See Haddock of
             -- 'KnownLtInt' and 'NewAllColsRecipe' to confirm that and
             -- understand why it's important.
-            (news, evex) <- foldr
-                (\assoc acc -> acc >>= flip snoc assoc)
-                (pure ([], mkCastAllCols env k v c rho' (Ct.ctEvExpr new)))
-                extracts
+            (news, evex) <- foldM
+                snoc
+                ([], mkCastAllCols env k v c rho' (Ct.ctEvExpr new))
+                (forgetDirectedList $ extracts `asTypeOf` nil @Innermost)
             let evtm = TcEvidence.EvExpr $ mkUncastAllCols env k v c rho evex `GhcPlugins.mkCast` GhcPlugins.mkSymCo (envAllColsCo k v c rho)
 
             pure ((evtm, old), map Ct.mkNonCanonical (new : news))
@@ -1024,7 +1034,7 @@ improve env famInstEnvs gidx ct
     , tc == classTyCon envAbsent
     , [k, v, nm, rho] <- args
     , Just ext <- getExtend env gidx rho
-    = goAbsent k v nm False [] ext <&> \rho' -> NewAbsentRecipe ct k v nm rho rho'
+    = goAbsent k v nm False (nilE @Innermost) ext <&> \rho' -> NewAbsentRecipe ct k v nm rho rho'
 
     | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe ty
     = goEq lhs rhs
@@ -1055,57 +1065,89 @@ improve env famInstEnvs gidx ct
         -- wait for kinds to match
         | not (eqType k0 k && eqType v0 v) = NoStep
         | equal env famInstEnvs x nm       = Contra
-        | apart env famInstEnvs x nm       = recu True            acc
-        | otherwise                        = recu hit  ((nm, a) : acc)
+        | apart env famInstEnvs x nm       = recu True                acc
+        | otherwise                        = recu hit  (consE (nm, a) acc)
       where
         Extend k v nm a rho = ext
 
         recu hit' acc' = case getExtend env gidx rho of
-            Nothing   -> if not hit' then NoStep else Step $ mkExtensions env k v rho (Extends (reverse acc'))
+            Nothing   -> if not hit' then NoStep else Step $ mkExtensions env k v rho (revE acc')
             Just ext' -> goAbsent k0 v0 x hit' acc' ext'
 
 -----
 
-data Extensions = Extends [(TcType, TcType)]
+newtype DirectedList (leftmost :: Leftmost) a = DirectedList {forgetDirectedList :: [a]}
+
+nil :: forall leftmost {a}. DirectedList leftmost a
+nil = DirectedList []
+
+cons :: a -> DirectedList leftmost a -> DirectedList leftmost a
+cons x (DirectedList xs) = DirectedList (x : xs)
+
+uncons :: DirectedList leftmost a -> Maybe (a, DirectedList leftmost a)
+uncons (DirectedList xs) = case xs of
+    []    -> Nothing
+    x:xs' -> Just (x, DirectedList xs')
+
+data Leftmost = Innermost | Rev Leftmost
+type Outermost = Rev Innermost
+
+unrevDL :: DirectedList (Rev leftmost) a -> DirectedList leftmost a
+unrevDL (DirectedList assocs) = DirectedList (reverse assocs)
+
+revDL :: DirectedList leftmost a -> DirectedList (Rev leftmost) a
+revDL (DirectedList assocs) = DirectedList (reverse assocs)
+
+newtype Extensions (leftmost :: Leftmost) = Extends {forgetExtensions :: DirectedList leftmost (TcType, TcType)}
+
+unconsE :: Extensions leftmost -> Maybe (TcType, TcType, Extensions leftmost)
+unconsE (Extends (DirectedList xs)) = case xs of
+    []          -> Nothing
+    (nm, a):xs' -> Just (nm, a, Extends (DirectedList xs'))
+
+revrevE :: Extensions leftmost -> Extensions (Rev (Rev leftmost))
+revrevE = coerce
+
+revE :: Extensions leftmost -> Extensions (Rev leftmost)
+revE (Extends assocs) = Extends (revDL assocs)
+
+nilE :: forall leftmost. Extensions leftmost
+nilE = Extends (DirectedList [])
+
+consE :: (TcType, TcType) -> Extensions leftmost -> Extensions leftmost
+consE x (Extends assocs) = Extends (cons x assocs)
+
+len :: Extensions leftmost -> Int
+len (Extends (DirectedList xs)) = length xs
 
 -- | Zero or more 'getExtend' calls
---
--- Innermost becomes leftmost.
-peel :: Env -> GivensIndex -> Extension -> (TcType, Extensions)
-peel env gidx = peel_ env gidx []
+peel :: Env -> GivensIndex -> Extension -> (TcType, Extensions Innermost)
+peel env gidx = peel_ env gidx (nilE @Innermost)
 
-peel_ :: Env -> GivensIndex -> [(TcType, TcType)] -> Extension -> (TcType, Extensions)
+peel_ :: Env -> GivensIndex -> Extensions Innermost -> Extension -> (TcType, Extensions Innermost)
 peel_ env gidx acc ext =
     case getExtend env gidx rho of
-        Nothing   -> (rho, Extends acc')
+        Nothing   -> (rho, acc')
         Just ext' -> peel_ env gidx acc' ext'
   where
     Extend _k _v nm a rho = ext
 
-    acc' = (nm, a) : acc
+    acc' = consE (nm, a) acc
 
 -- | Pluck out the shallowest column that is equal to the given name and on
 -- both sides of the equivalence under only extensions that are apart from the
 -- given name
-pop :: Env -> FamInstEnvs -> GivensIndex -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
-pop env famInstEnvs gidx needle misses = \case
-    Extends []               -> Nothing
-    Extends (assoc : assocs)
+pop :: Env -> FamInstEnvs -> GivensIndex -> TcType -> [(TcType, x)] -> Extensions leftmost -> Maybe (TcType, Extensions leftmost)
+pop env famInstEnvs gidx needle misses = (. unconsE) $ \case
+    Nothing            -> Nothing
+    Just (nm, a, exts)
         -- TODO zonk them?
-      | eq  (fst assoc) -> do guard (all (apt . fst) misses); Just (snd assoc, Extends assocs)
-      | apt (fst assoc) -> fmap (cons assoc) <$> pop env famInstEnvs gidx needle misses (Extends assocs)
-      | otherwise       -> Nothing
+      | eq  nm    -> do guard (all (apt . fst) misses); Just (a, exts)
+      | apt nm    -> fmap (consE (nm, a)) <$> pop env famInstEnvs gidx needle misses exts
+      | otherwise -> Nothing
   where
-    cons x (Extends xs) = Extends (x : xs)
-
     eq  = equal env famInstEnvs needle
     apt = apart env famInstEnvs needle
-
-rev :: Extensions -> Extensions
-rev (Extends xs) = Extends (reverse xs)
-
-len :: Extensions -> Int
-len (Extends xs) = length xs
 
 -- | Decompose commutative rearrangements by repeatedly calling 'pop'
 --
@@ -1115,10 +1157,10 @@ len (Extends xs) = length xs
 -- via a zip and also unify the roots.
 isRearranged :: Env -> FamInstEnvs -> GivensIndex -> Extension -> Extension -> Step [NewEquality]
 isRearranged env famInstEnvs gidx lext rext =
-    go [] lexts0 [] rassocs0
+    go [] (revE lexts0) (nilE @Innermost) (revE rexts0)
   where
-    (lroot, rev -> lexts0)                 = peel env gidx lext
-    (rroot, Extends (reverse -> rassocs0)) = peel env gidx rext
+    (lroot, lexts0) = peel env gidx lext
+    (rroot, rexts0) = peel env gidx rext
 
     Extend lk lv _lnm _la _lrho = lext
     Extend rk rv _rnm _ra _rrho = rext
@@ -1126,15 +1168,17 @@ isRearranged env famInstEnvs gidx lext rext =
     same    = eqType lroot rroot
     matched = isEmp env lroot || isEmp env rroot || same
 
-    go neweqs lexts rmisses = \case
-        r:rs -> case pop env famInstEnvs gidx (fst r) rmisses lexts of
-            Nothing           -> go neweqs                            lexts (r : rmisses) rs
-            Just (la, lexts') -> go (NewEquality la (snd r) : neweqs) lexts'     rmisses  rs
-        []
-            | isEmp env rroot, length rmisses < len lexts
+    go :: [NewEquality] -> Extensions Outermost -> Extensions Innermost -> Extensions Outermost -> Step [NewEquality]
+    go neweqs lexts rmisses = (. unconsE) $ \case
+        Just (rnm, ra, rexts') -> case pop env famInstEnvs gidx rnm (forgetDirectedList (forgetExtensions rmisses)) lexts of
+            Nothing           -> go neweqs                       lexts (consE (rnm, ra) rmisses) rexts'
+            Just (la, lexts') -> go (NewEquality la ra : neweqs) lexts'                 rmisses  rexts'
+
+        Nothing
+            | isEmp env rroot, len rmisses < len lexts
             -> Contra
 
-            | isEmp env lroot, len lexts < length rmisses
+            | isEmp env lroot, len lexts < len rmisses
             -> Contra
 
             -- If the roots match, all the remaining rights are equal and the
@@ -1142,41 +1186,42 @@ isRearranged env famInstEnvs gidx lext rext =
             -- the same.
             | matched
             , Just (rnm, ras) <- checkMono env famInstEnvs rmisses
-            , let Extends xs = lexts
-            , Just acc <- zipper neweqs (\acc (lnm, la) ra -> NewEquality lnm rnm : NewEquality la ra : acc) xs ras
+            , Just acc <- zipper neweqs (\acc (lnm, la) ra -> NewEquality lnm rnm : NewEquality la ra : acc) (forgetExtensions lexts) ras
             -> Step $ if same then acc else NewEquality lroot rroot : acc
 
             -- ditto, reflected
-            | let Extends xs = lexts
-            , matched
-            , Just (lnm, las) <- checkMono env famInstEnvs xs
-            , Just acc <- zipper neweqs (\acc la (rnm, ra) -> NewEquality lnm rnm : NewEquality la ra : acc) las rmisses
+            | matched
+            , Just (lnm, las) <- checkMono env famInstEnvs lexts
+            , Just acc <- zipper neweqs (\acc la (rnm, ra) -> NewEquality lnm rnm : NewEquality la ra : acc) las (forgetExtensions (revrevE rmisses))
             -> Step $ if same then acc else NewEquality lroot rroot : acc
 
             | null neweqs
             -> NoStep
 
-            | same, len lexts /= length rmisses
+            | same, len lexts /= len rmisses
             -> Contra
 
             | otherwise
             -> Step $
                   NewEquality (mkExtensions env lk lv lroot lexts)
-                              (mkExtensions env rk rv rroot (Extends (reverse rmisses)))
+                              (mkExtensions env rk rv rroot (revE rmisses))
                 : neweqs
 
-checkMono :: Env -> FamInstEnvs -> [(TcType, TcType)] -> Maybe (TcType, [TcType])
+checkMono :: Env -> FamInstEnvs -> Extensions leftmost -> Maybe (TcType, DirectedList (Rev leftmost) TcType)
 checkMono env famInstEnvs =
-    \case
-        []               -> Nothing
-        (nm, a) : assocs -> go nm [a] assocs
+    (. unconsE) $ \case
+        Nothing            -> Nothing
+        Just (nm, a, exts) -> go nm (DirectedList [a]) exts
   where
-    go x acc = \case
-        []               -> Just (x, acc)
-        (nm, a) : assocs -> if equal env famInstEnvs x nm then go x (a : acc) assocs else Nothing
+    go x acc = (. unconsE) $ \case
+        Nothing            -> Just (x, acc)
+        Just (nm, a, exts) -> if equal env famInstEnvs x nm then go x (cons a acc) exts else Nothing
 
-zipper :: [c] -> ([c] -> a -> b -> [c]) -> [a] -> [b] -> Maybe [c]
-zipper acc f xs ys = case (xs, ys) of
+zipper :: [c] -> ([c] -> a -> b -> [c]) -> DirectedList leftmost a -> DirectedList leftmost b -> Maybe [c]
+zipper acc f (DirectedList xs) (DirectedList ys) = zipper_ acc f xs ys
+
+zipper_ :: [c] -> ([c] -> a -> b -> [c]) -> [a] -> [b] -> Maybe [c]
+zipper_ acc f xs ys = case (xs, ys) of
     ([],    []   ) -> Just acc
-    (x:xs', y:ys') -> zipper (f acc x y) f xs' ys'
+    (x:xs', y:ys') -> zipper_ (f acc x y) f xs' ys'
     _              -> Nothing   -- ragged

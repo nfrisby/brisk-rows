@@ -37,7 +37,7 @@ import           BriskRows.Internal.RV.Proxy
 --
 -- This enables expressions such as @'BriskRows.RV.emp' '.*' #foo 'BriskRows.:=' True '.*' #bar 'BriskRows.:=' 3@ when using @-XOverloadedLabels@.
 data Name nm where    -- omitting the k variable so that it has /inferred/ visibility
-  Name :: forall {nm}. Name nm
+  Name :: forall nm. Name nm
 
 instance (k ~ Symbol, sym1 ~~ sym2) => IsLabel sym1 (Name (sym2 :: k)) where fromLabel = Name
 
