@@ -420,7 +420,7 @@ newEnv = do
     envWantedKnownLen <- lookupId modul "wantedKnownLen"
 
     pure Env{
-              doTrace  = \x -> {- asTypeOf (pure ()) $ -} TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
+              doTrace  = \_ -> pure () -- \x -> TcPluginM.tcPluginIO $ putStrLn $ showSDoc dflags x
             , doTrace_ = \x -> trace (showSDoc dflags x)
             , ..
             }
