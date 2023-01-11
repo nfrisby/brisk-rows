@@ -8,6 +8,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableSuperClasses #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -43,6 +44,7 @@ module BriskRows.Internal (
     Err,
     NoErr,
     TypeErr,
+    UnsafeExt,
     castAllCols,
     givenAllCols1,
     givenAllCols2,
@@ -443,3 +445,12 @@ givenAllCols2 i# j# older c =
     Seq.deleteAt
         (I# (i# +# j#))
         (older c)
+
+-----
+
+-- | This family lies about its injectivity
+--
+-- GHC's architecture does not currently allow plugins to influence the liberal
+-- coverage condition check for instances of classes with fundeps (such as
+-- 'GHC.Records.HasField').
+type family UnsafeExt (nm :: k) (a :: v) (rho :: ROW k v) = (rho' :: ROW k v) | rho' -> a where {}

@@ -55,6 +55,7 @@ import qualified Data.Foldable as Foldable
 import           Data.Kind (Constraint, Type)
 import qualified Data.Sequence as Sq
 import           GHC.Exts (Any, Proxy#, proxy#)
+import qualified GHC.Records as GHC
 import           GHC.TypeLits (ErrorMessage (Text, (:<>:), (:$$:), ShowType))
 import           GHC.Types (Int (I#))
 import           Unsafe.Coerce (unsafeCoerce)
@@ -100,6 +101,9 @@ del# = \nm rcd ->
 -- | Project a value out of the record
 prj# :: forall {nm} {rho} {fld} {a}. KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> Sem fld nm a
 prj# = \nm rcd -> prjAt (Idx.idx# nm (proxy# @rho)) rcd
+
+-- | This use of 'UnsafeExt' is safe because @a@ is indeed determined when @rho@ is equal any outermost @nm := a@ extension.
+instance (rho ~ UnsafeExt nm img inner, KnownLT nm rho, a ~ Sem fld nm img) => GHC.HasField nm (Rcd fld rho) a where getField = prj# (proxy# @nm)
 
 -----
 

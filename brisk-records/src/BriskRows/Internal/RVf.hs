@@ -43,6 +43,7 @@ module BriskRows.Internal.RVf (
 
 import           Data.Kind (Constraint, Type)
 import           GHC.Exts (Proxy#, proxy#)
+import qualified GHC.Records as GHC
 
 import           BriskRows.Fields
 import           BriskRows.Internal
@@ -69,6 +70,9 @@ del# = \nm (Rcd rcd) -> Rcd $ RVtf.del# nm rcd
 -- | Project a value out of the record
 prj# :: KnownLT nm rho => Proxy# nm -> Rcd fld (rho :& nm := a) -> fld nm a
 prj# = \nm (Rcd rcd) -> RVtf.prj# nm rcd
+
+-- | This use of 'UnsafeExt' is safe because @a@ is indeed determined when @rho@ is equal any outermost @nm := a@ extension.
+instance (rho ~ UnsafeExt nm img inner, KnownLT nm rho, a ~ fld nm img) => GHC.HasField nm (Rcd fld rho) a where getField = prj# (proxy# @nm)
 
 -----
 

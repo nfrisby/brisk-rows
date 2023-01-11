@@ -13,14 +13,16 @@ module BriskRows.Plugin (plugin) where
 import           Debug.Trace (trace)
 
 import           Control.Monad (ap, foldM, guard)
+import           Data.Functor ((<&>))
+import qualified Data.List.NonEmpty as NE
 import           Data.Map (Map)
 import qualified Data.Map as Map
-import           Data.Functor ((<&>))
 import           Data.Maybe (mapMaybe)
 import           Data.Traversable (forM)
 
 import           GHC.Types.Id.Make (proxyHashId)
 import           GHC.Core.Class (Class, classTyCon)
+import           GHC.Core.DataCon (dataConWrapId)
 import           GHC.Platform (Platform)
 import qualified GHC.Core as Core
 import           GHC.Core.Make (mkCoreApps)
@@ -69,11 +71,13 @@ plugin = GhcPlugins.defaultPlugin
   , GhcPlugins.tcPlugin        = \_args -> Just TcRnTypes.TcPlugin
       { TcRnTypes.tcPluginInit    = newEnv
       , TcRnTypes.tcPluginStop    = \_ -> pure ()
-      , TcRnTypes.tcPluginRewrite = \env@Env{envCmpName, envExtOp = _} ->
+      , TcRnTypes.tcPluginRewrite = \env@Env{envCmpName, envUnsafeExt} ->
           -- NOTE WELL that these rewrites only happen inside of constraints!
           --
           -- TODO confirm that
-            unitUFM envCmpName (rewriteCmpName env)
+                unitUFM envCmpName   (\_rwenv _gs args -> pure $ rewriteCmpName env args)
+            <>
+                unitUFM envUnsafeExt (\_rwenv _gs args -> pure $ rewriteUnsafeExt env args)
       , TcRnTypes.tcPluginSolve   = \env evBindsVar gs ws -> do
             famInstEnvs <- TcPluginM.getFamInstEnvs
 
@@ -86,9 +90,13 @@ plugin = GhcPlugins.defaultPlugin
             let cts = if null ws then gs else ws
 
             doTrace env $ text $ "\n\n\n==========TABLE\n"
-            doTrace env $ let RowVarLTs m = gidx in ppr $ Map.toList $ Map.map Map.keys m
+            do
+                let GivensIndex (RowVarLTs x) (RowVarDefns y) = gidx
+                doTrace env $ ppr $ Map.toList $ Map.map Map.keys x
+                doTrace env $ ppr $ Map.keys y
 
-            let (irrel_contras, recipes) = mapStep (improve env famInstEnvs) cts
+            -- TODO properly prevent a Given CEqCan from simplifying itself
+            let (irrel_contras, recipes) = mapStep (improve env famInstEnvs (if null ws then GivensIndex (RowVarLTs Map.empty) (RowVarDefns Map.empty) else gidx)) cts
 
             doTrace env $ text $ "\n\n\n==========IRREL RECIPES\n"
             doTrace env $ ppr recipes
@@ -109,7 +117,7 @@ plugin = GhcPlugins.defaultPlugin
             pure TcPluginSolveResult {
                 tcPluginInsolubleCts = irrel_contras
               ,
-                tcPluginSolvedCts    = map oldIrrel recipes <> solvedDicts
+                tcPluginSolvedCts    = map (oldIrrel env) recipes <> solvedDicts
               ,
                 tcPluginNewCts       = concat newIrrels <> concat newDictss
               }
@@ -126,28 +134,58 @@ instance Ord NonDetTcType where compare (NonDetTcType l) (NonDetTcType r) = TcTy
 -- | An index of the 'BriskRows.Internal.KnownLT' Given constraints
 newtype RowVarLTs = RowVarLTs (Map NonDetTcType (Map NonDetTcType TcEvidence.EvExpr))
 
-indexGivens :: Env -> [Ct] -> RowVarLTs
-indexGivens env =
-    go Map.empty
-  where
-    Env {envKnownLT, envKnownLTCo} = env
+-- | An index of the 'CEqCan's that are elimnating extensions.
+--
+-- TODO when would it be productive to consider many possible extensions?
+newtype RowVarDefns = RowVarDefns (Map NonDetTcType (NE.NonEmpty Extension))
 
-    go acc = \case
-        []       -> RowVarLTs acc
+data GivensIndex = GivensIndex RowVarLTs RowVarDefns
+
+indexGivens :: Env -> [Ct] -> GivensIndex
+indexGivens env =
+    go Map.empty Map.empty
+  where
+    Env {envAssign, envExtOp, envKnownLT, envKnownLTCo} = env
+
+    go acc_knownLT acc_extEq = \case
+        []       -> GivensIndex (RowVarLTs acc_knownLT) (RowVarDefns acc_extEq)
         ct : cts
 
-          | Just (tc, [k, v, nm, rho]) <- TcType.tcSplitTyConApp_maybe (Ct.ctPred ct)
+
+
+          | Just (tc, args) <- TcType.tcSplitTyConApp_maybe (Ct.ctPred ct)
           , tc == classTyCon envKnownLT
-          , Nothing <- getExtend env rho
+          , [k, v, nm, rho] <- args
+          , Just envExtOp /= TcType.tcTyConAppTyCon_maybe rho
+
           , let ex   =
                                         Ct.ctEvExpr (Ct.ctEvidence ct)
                     `GhcPlugins.mkCast` envKnownLTCo k v nm rho
                     `mkCoreApps`        [ Core.mkTyApps (TcEvidence.evId proxyHashId) [TcType.tcTypeKind x, x] | x <- [nm, rho] ]
-          , let acc' = Map.insertWith Map.union (NonDetTcType rho) (Map.singleton (NonDetTcType nm) ex) acc
-          -> go acc' cts
+          , let acc' = Map.insertWith Map.union (NonDetTcType rho) (Map.singleton (NonDetTcType nm) ex) acc_knownLT
+          -> go acc' acc_extEq cts
+
+
+
+          | Ct.CEqCan{Ct.cc_lhs, Ct.cc_rhs} <- ct
+          , Ct.TyFamLHS tc args <- cc_lhs
+
+          , tc == envExtOp
+          , [k, v, rho, asn] <- args
+          , Just (tc', args') <- TcType.tcSplitTyConApp_maybe asn
+
+          , tc' == envAssign
+          , [k', v', nm, a] <- args'
+          , eqType k k' && eqType v v'
+
+          , let ext  = Extend k v nm a rho
+          , let acc' = Map.insertWith (<>) (NonDetTcType cc_rhs) (ext NE.:| []) acc_extEq
+          -> go acc_knownLT acc' cts
+
+
 
           | otherwise
-          -> go acc cts
+          -> go acc_knownLT acc_extEq cts
 
 -----
 
@@ -197,6 +235,10 @@ data Env = Env {
     doTrace           :: GhcPlugins.SDoc -> TcPluginM ()
   ,
     doTrace_          :: forall a. GhcPlugins.SDoc -> a -> a
+  ,
+    envAbsent         :: !Class
+  ,
+    envAbsentCon      :: !GhcPlugins.DataCon
   ,
     envAllCols        :: !Class
   ,
@@ -251,6 +293,8 @@ data Env = Env {
   ,
     envUncastAllCols  :: !GhcPlugins.Id
   ,
+    envUnsafeExt      :: !TyCon
+  ,
     envWantedAllCols  :: !GhcPlugins.Id
   ,
     envWantedKnownLT  :: !GhcPlugins.Id
@@ -264,6 +308,13 @@ newEnv = do
 
     modul <- lookupModule "BriskRows.Internal"
     let luTC = lookupTC modul
+
+    envAbsent <- TyCon.tyConClass_maybe <$> luTC "Absent" >>= \case
+        Just cls -> pure cls
+        Nothing  -> panicDoc "Plugin.BriskRows could not find the Absent class" (text "")
+    envAbsentCon <- case TyCon.tyConSingleDataCon_maybe (classTyCon envAbsent) of
+        Just x  -> pure x
+        Nothing -> panicDoc "Plugin.BriskRows could not find the Absent dictonary constructor" (text "")
 
     envAllCols <- TyCon.tyConClass_maybe <$> luTC "AllCols" >>= \case
         Just cls -> pure cls
@@ -328,6 +379,8 @@ newEnv = do
 
     envUncastAllCols <- lookupId modul "uncastAllCols"
 
+    envUnsafeExt <- luTC "UnsafeExt"
+
     envWantedAllCols  <- lookupId modul "wantedAllCols"
     envWantedKnownLT  <- lookupId modul "wantedKnownLT"
     envWantedKnownLen <- lookupId modul "wantedKnownLen"
@@ -343,6 +396,7 @@ isEmp Env{envEmp} ty = case TcType.tcSplitTyConApp_maybe ty of
     Just (tc, [_k, _v]) -> envEmp == tc
     _                   -> False
 
+-- | Leftmost becomes outermost
 mkExtensions :: Env -> TcKind -> TcKind -> TcType -> Extensions -> TcType
 mkExtensions env k v root exts =
     case assocs of
@@ -357,15 +411,26 @@ mkExtensions env k v root exts =
 
     Extends assocs = exts
 
+mkAbsent :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcType
+mkAbsent env k v nm rho =
+    TcType.mkTyConApp (classTyCon envAbsent) [k, v, nm, rho]
+  where
+    Env{envAbsent} = env
+
+mkAbsentDict :: Env -> TcKind -> TcKind -> TcType -> TcType -> TcEvidence.EvExpr
+mkAbsentDict env k v nm rho =
+    TcEvidence.evId (dataConWrapId envAbsentCon) `Core.mkTyApps` [k, v, nm, rho]
+  where
+    Env{envAbsentCon} = env
+
 -----
 
 -- | See 'BriskRows.Internal.CmpName' for the explanation of we implement its reflexivity in the plugin
-rewriteCmpName :: Env -> TcRnTypes.RewriteEnv -> [Ct] -> [TcType] -> TcPluginM TcRnTypes.TcPluginRewriteResult
-rewriteCmpName env _rwenv _gs args = case args of
+rewriteCmpName :: Env -> [TcType] -> TcRnTypes.TcPluginRewriteResult
+rewriteCmpName env args = case args of
   [_k, l, r]
-    | l `eqType` r -> pure $ TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
-    | otherwise    -> pure TcRnTypes.TcPluginNoRewrite
-  _ -> fail "CmpName wrote arg count!"
+    | l `eqType` r -> TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
+  _ -> TcRnTypes.TcPluginNoRewrite
   where
     Env{envCmpName, envEQ} = env
 
@@ -374,16 +439,41 @@ rewriteCmpName env _rwenv _gs args = case args of
 
     co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:CmpName.Refl") TyCon.Nominal lhs rhs
 
+rewriteUnsafeExt :: Env -> [TcType] -> TcRnTypes.TcPluginRewriteResult
+rewriteUnsafeExt env args = case args of
+  [k, v, nm, a, rho] ->
+      let lhs = TcType.mkTyConApp envUnsafeExt args
+          asn = TcType.mkTyConApp envAssign [k, v, nm, a]
+          rhs = TcType.mkTyConApp envExtOp [k, v, rho, asn]
+
+          co = GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:UnsafeExt") TyCon.Nominal lhs rhs
+      in
+      TcRnTypes.TcPluginRewriteTo (Reduction co rhs) []
+  _ -> TcRnTypes.TcPluginNoRewrite
+  where
+    Env{envAssign, envExtOp, envUnsafeExt} = env
+
 -----
 
 data OldEquality = OldEquality !TcType !TcType
 data NewEquality = NewEquality !TcType !TcType
 
-data NewIrrelRecipe = NewEqRecipe !Ct !OldEquality ![NewEquality]
+data NewIrrelRecipe =
+    NewAbsentRecipe !Ct !TcKind !TcKind !TcType !TcType !TcType
+  |
+    NewEqRecipe !Ct !OldEquality ![NewEquality]
 
-oldIrrel :: NewIrrelRecipe -> (TcEvidence.EvTerm, Ct)
-oldIrrel (NewEqRecipe old (OldEquality lhs rhs) _news) =
-    case Ct.ctEvidence old of
+oldIrrel :: Env -> NewIrrelRecipe -> (TcEvidence.EvTerm, Ct)
+oldIrrel env = \case
+    NewAbsentRecipe old k v nm rho _rho' -> case Ct.ctEvidence old of
+        Ct.CtGiven{} ->
+            -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
+            let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
+            in (evtm, old)
+        Ct.CtWanted{} ->
+            let evex = mkAbsentDict env k v nm rho
+            in (TcEvidence.EvExpr evex, old)
+    NewEqRecipe old (OldEquality lhs rhs) _news -> case Ct.ctEvidence old of
         Ct.CtGiven{} ->
             -- GHC plugin interface's weird rule: use a Given's own evidence in order to eliminate it.
             let evtm = Ct.ctEvTerm (Ct.ctEvidence old)
@@ -393,23 +483,33 @@ oldIrrel (NewEqRecipe old (OldEquality lhs rhs) _news) =
             in (TcEvidence.evCoercion co, old)
 
 newIrrel :: Env -> TcEvidence.EvBindsVar -> NewIrrelRecipe -> TcPluginM [Ct]
-newIrrel env evBindsVar (NewEqRecipe old _oldeq news) =
-    forM news $ \(NewEquality lhs rhs) -> do
+newIrrel env evBindsVar = \case
+    NewAbsentRecipe old k v nm rho rho' -> do
         let loc = Ct.ctLoc old
-            eq  = Predicate.mkPrimEqPred lhs rhs
-        doTrace env $ text "EMITTING" <+> ppr eq
-        Ct.mkNonCanonical <$> case Ct.ctEvidence old of
-            Ct.CtWanted{} -> TcPluginM.newWanted loc eq
-            Ct.CtGiven {} -> 
-                TcPluginM.newGiven evBindsVar loc eq
-              $ Core.Coercion
-              $ GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Row.Rearrange") TyCon.Nominal lhs rhs
+            ty  = mkAbsent env k v nm rho'
+        ((:[]) . Ct.mkNonCanonical) <$> case Ct.ctEvidence old of
+            Ct.CtWanted{} -> TcPluginM.newWanted loc ty
+            Ct.CtGiven {} ->
+                TcPluginM.newGiven evBindsVar loc ty
+              $ mkAbsentDict env k v nm rho
+    NewEqRecipe old _oldeq news ->
+        forM news $ \(NewEquality lhs rhs) -> do
+            let loc = Ct.ctLoc old
+                eq  = Predicate.mkPrimEqPred lhs rhs
+            doTrace env $ text "EMITTING" <+> ppr eq
+            Ct.mkNonCanonical <$> case Ct.ctEvidence old of
+                Ct.CtWanted{} -> TcPluginM.newWanted loc eq
+                Ct.CtGiven {} ->
+                    TcPluginM.newGiven evBindsVar loc eq
+                  $ Core.Coercion
+                  $ GhcPlugins.mkUnivCo (TyCoRep.PluginProv "brisk-rows:Row.Rearrange") TyCon.Nominal lhs rhs
 
 instance GhcPlugins.Outputable NewEquality where
   ppr (NewEquality lhs rhs) = text "NewEquality" <+> ppr (lhs, rhs)
 
 instance GhcPlugins.Outputable NewIrrelRecipe where
-  ppr (NewEqRecipe old _oldeq news) = text "NewEqRecipe" <+> ppr (old, news)
+  ppr (NewAbsentRecipe old k v nm rho rho') = text "NewAbsentRecipe" <+> ppr (old, k, v, nm, rho, rho')
+  ppr (NewEqRecipe     old _oldeq news) = text "NewEqRecipe" <+> ppr (old, news)
 
 -----
 
@@ -417,18 +517,26 @@ data Extension =
     -- | @Extend_Row# {k} {v} nm a rho _err@
     Extend !TcKind !TcKind !TcType !TcType !TcType
 
-getExtend :: Env -> TcType -> Maybe Extension
-getExtend env ty = case TcType.tcSplitTyConApp_maybe ty of
-    Just (tc, args)
-      | tc == envExtOp
-      , [k, v, rho, col] <- args
-      , Just (tc', args') <- TcType.tcSplitTyConApp_maybe col
-      , tc' == envAssign
-      , [_k, _v, nm, a] <- args'
-      -> Just $ Extend k v nm a rho
-    _ -> Nothing
+-- | TODO detect cycles and abort with 'Contra' when 'getExtend' is called in a loop
+getExtend :: Env -> GivensIndex -> TcType -> Maybe Extension
+getExtend env gidx ty
+    | Just (tc, args) <- TcType.tcSplitTyConApp_maybe ty
+    , tc == envExtOp
+    , [k, v, rho, col] <- args
+    , Just (tc', args') <- TcType.tcSplitTyConApp_maybe col
+    , tc' == envAssign
+    , [k', v', nm, a] <- args'
+    , eqType k k' && eqType v v'
+    = Just $ Extend k v nm a rho
+
+    | Just (ext NE.:| []) <- Map.lookup (NonDetTcType ty) m
+    = Just ext
+
+    | otherwise
+    = Nothing
   where
     Env{envAssign, envExtOp} = env
+    GivensIndex _rowVarLTs (RowVarDefns m) = gidx
 
 -----
 
@@ -518,24 +626,24 @@ instance GhcPlugins.Outputable NewDictRecipe where
   ppr (NewKnownLenRecipe old k v   rho i        rho') = text "NewKnownLenRecipe" <+> ppr (old, k, v,    rho, i,        rho')
   ppr (NewAllColsRecipe  old k v c rho extracts rho') = text "NewAllColsRecipe"  <+> ppr (old, k, v, c, rho, extracts, rho')
 
-simplifyDict :: Env -> FamInstEnvs -> RowVarLTs -> Ct -> Maybe NewDictRecipe
+simplifyDict :: Env -> FamInstEnvs -> GivensIndex -> Ct -> Maybe NewDictRecipe
 simplifyDict env famInstEnvs gidx ct = case ct of
     Ct.CDictCan{Ct.cc_class, Ct.cc_tyargs}
 
       | cc_class == envKnownLT
       , [k, v, x, rho] <- cc_tyargs
-      , Just ext <- getExtend env rho
+      , Just ext <- getExtend env gidx rho
       -> goKnownLT x ext <&> \(i, rho') -> NewKnownLTRecipe ct k v x rho i rho'
 
       | cc_class == envKnownLen
       , [k, v, rho] <- cc_tyargs
-      , Just ext <- getExtend env rho
+      , Just ext <- getExtend env gidx rho
       -> Just $ let (rho', i) = goKnownLen ext in NewKnownLenRecipe ct k v rho i rho'
 
       | cc_class == envAllCols
       , [k, v, c, rho] <- cc_tyargs
-      , Just ext <- getExtend env rho
-      , let (root, exts) = peel env ext
+      , Just ext <- getExtend env gidx rho
+      , let (root, exts) = peel env gidx ext
       -> goAllCols k v root [] [] exts <&> \(extracts, rho') -> NewAllColsRecipe ct k v c rho extracts rho'
 
     _ -> Nothing
@@ -549,7 +657,7 @@ simplifyDict env famInstEnvs gidx ct = case ct of
       where
         Extend k v nm a rho = ext
 
-        recu = getExtend env rho >>= goKnownLT x
+        recu = getExtend env gidx rho >>= goKnownLT x
 
         incr = \case
             Nothing        -> (1, rho)
@@ -565,7 +673,7 @@ simplifyDict env famInstEnvs gidx ct = case ct of
 
     goKnownLen :: Extension -> (TcType, Int)
     goKnownLen ext =
-        (+1) <$> case getExtend env rho of
+        (+1) <$> case getExtend env gidx rho of
             Nothing   -> (rho, 0)
             Just rho' -> goKnownLen rho'
       where
@@ -633,12 +741,13 @@ fst3 = \(x, _, _) -> x
 fstsnd3 :: (a, b, c) -> (a, b)
 fstsnd3 = \(x, y, _) -> (x, y)
 
-knownLtRoot :: Env -> RowVarLTs -> TcType -> TcType -> Maybe TcEvidence.EvExpr
-knownLtRoot env (RowVarLTs gidx) nm root
+knownLtRoot :: Env -> GivensIndex -> TcType -> TcType -> Maybe TcEvidence.EvExpr
+knownLtRoot env gidx nm root
   | isEmp env root = Just $ Core.mkIntLit envPlatform 0
-  | otherwise      = Map.lookup (NonDetTcType root) gidx >>= Map.lookup (NonDetTcType nm)
+  | otherwise      = Map.lookup (NonDetTcType root) m >>= Map.lookup (NonDetTcType nm)
   where
     Env{envPlatform} = env
+    GivensIndex (RowVarLTs m) _rowVarDefns = gidx
 
 cmpPartition ::
      Env
@@ -877,21 +986,32 @@ instance Monad Step where
 -- > l :& nm := a ~ r :& nm := a   implies/requires   l ~ r
 --
 -- > rho :& x := a :& y := b :& ... ~ Row# cols   implies/requires   rho ~ Row# cols :# y :# x, b ~ Select y ..., a ~ Select x ...
-improve :: Env -> FamInstEnvs -> Ct -> Step NewIrrelRecipe
-improve env famInstEnvs ct = case ct of
-    Ct.CNonCanonical{}
-      | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe (Ct.ctPred ct)
-      -> go lhs rhs
-    _ -> NoStep
+improve :: Env -> FamInstEnvs -> GivensIndex -> Ct -> Step NewIrrelRecipe
+improve env famInstEnvs gidx ct
+
+    | Just (tc, args) <- TcType.tcSplitTyConApp_maybe ty
+    , tc == classTyCon envAbsent
+    , [k, v, nm, rho] <- args
+    , Just ext <- getExtend env gidx rho
+    = goAbsent k v nm False [] ext <&> \rho' -> NewAbsentRecipe ct k v nm rho rho'
+
+    | Just (TcEvidence.Nominal, lhs, rhs) <- Predicate.getEqPredTys_maybe ty
+    = goEq lhs rhs
+
+    | otherwise = NoStep
   where
-    go lhs rhs = case (getExtend env lhs, getExtend env rhs) of
+    Env{envAbsent} = env
+
+    ty = Ct.ctPred ct
+
+    goEq lhs rhs = case (getExtend env gidx lhs, getExtend env gidx rhs) of
         (Nothing,   Nothing  ) -> NoStep
         (Just{},    Nothing  ) -> if isEmp env rhs then Contra else NoStep
         (Nothing,   Just{}   ) -> if isEmp env lhs then Contra else NoStep
         (Just lext, Just rext) ->
             -- wait for kinds to match
             if not (sameKinds lext rext) then NoStep else
-            NewEqRecipe ct (OldEquality lhs rhs) <$> isRearranged env famInstEnvs lext rext
+            NewEqRecipe ct (OldEquality lhs rhs) <$> isRearranged env famInstEnvs gidx lext rext
 
     sameKinds :: Extension -> Extension -> Bool
     sameKinds lext rext =
@@ -900,21 +1020,34 @@ improve env famInstEnvs ct = case ct of
         Extend lk lv _lnm _la _lrho = lext
         Extend rk rv _rnm _ra _rrho = rext
 
+    goAbsent k0 v0 x hit acc ext
+        -- wait for kinds to match
+        | not (eqType k0 k && eqType v0 v) = NoStep
+        | equal env famInstEnvs x nm       = Contra
+        | apart env famInstEnvs x nm       = recu True            acc
+        | otherwise                        = recu hit  ((nm, a) : acc)
+      where
+        Extend k v nm a rho = ext
+
+        recu hit' acc' = case getExtend env gidx rho of
+            Nothing   -> if not hit' then NoStep else Step $ mkExtensions env k v rho (Extends (reverse acc'))
+            Just ext' -> goAbsent k0 v0 x hit' acc' ext'
+
 -----
 
 data Extensions = Extends [(TcType, TcType)]
 
 -- | Zero or more 'getExtend' calls
 --
--- Note that the leftmost element is the innermost column.
-peel :: Env -> Extension -> (TcType, Extensions)
-peel env = peel_ env []
+-- Innermost becomes leftmost.
+peel :: Env -> GivensIndex -> Extension -> (TcType, Extensions)
+peel env gidx = peel_ env gidx []
 
-peel_ :: Env -> [(TcType, TcType)] -> Extension -> (TcType, Extensions)
-peel_ env acc ext =
-    case getExtend env rho of
+peel_ :: Env -> GivensIndex -> [(TcType, TcType)] -> Extension -> (TcType, Extensions)
+peel_ env gidx acc ext =
+    case getExtend env gidx rho of
         Nothing   -> (rho, Extends acc')
-        Just ext' -> peel_ env acc' ext'
+        Just ext' -> peel_ env gidx acc' ext'
   where
     Extend _k _v nm a rho = ext
 
@@ -923,13 +1056,13 @@ peel_ env acc ext =
 -- | Pluck out the shallowest column that is equal to the given name and on
 -- both sides of the equivalence under only extensions that are apart from the
 -- given name
-pop :: Env -> FamInstEnvs -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
-pop env famInstEnvs needle misses = \case
+pop :: Env -> FamInstEnvs -> GivensIndex -> TcType -> [(TcType, x)]-> Extensions -> Maybe (TcType, Extensions)
+pop env famInstEnvs gidx needle misses = \case
     Extends []               -> Nothing
     Extends (assoc : assocs)
         -- TODO zonk them?
       | eq  (fst assoc) -> do guard (all (apt . fst) misses); Just (snd assoc, Extends assocs)
-      | apt (fst assoc) -> fmap (cons assoc) <$> pop env famInstEnvs needle misses (Extends assocs)
+      | apt (fst assoc) -> fmap (cons assoc) <$> pop env famInstEnvs gidx needle misses (Extends assocs)
       | otherwise       -> Nothing
   where
     cons x (Extends xs) = Extends (x : xs)
@@ -949,12 +1082,12 @@ len (Extends xs) = length xs
 -- the replication of a single name, (b) the roots are matched or at least one
 -- is 'Emp', and (c) the extensions are the same length, then unify the columns
 -- via a zip and also unify the roots.
-isRearranged :: Env -> FamInstEnvs -> Extension -> Extension -> Step [NewEquality]
-isRearranged env famInstEnvs lext rext =
+isRearranged :: Env -> FamInstEnvs -> GivensIndex -> Extension -> Extension -> Step [NewEquality]
+isRearranged env famInstEnvs gidx lext rext =
     go [] lexts0 [] rassocs0
   where
-    (lroot, rev -> lexts0)                 = peel env lext
-    (rroot, Extends (reverse -> rassocs0)) = peel env rext
+    (lroot, rev -> lexts0)                 = peel env gidx lext
+    (rroot, Extends (reverse -> rassocs0)) = peel env gidx rext
 
     Extend lk lv _lnm _la _lrho = lext
     Extend rk rv _rnm _ra _rrho = rext
@@ -963,7 +1096,7 @@ isRearranged env famInstEnvs lext rext =
     matched = isEmp env lroot || isEmp env rroot || same
 
     go neweqs lexts rmisses = \case
-        r:rs -> case pop env famInstEnvs (fst r) rmisses lexts of
+        r:rs -> case pop env famInstEnvs gidx (fst r) rmisses lexts of
             Nothing           -> go neweqs                            lexts (r : rmisses) rs
             Just (la, lexts') -> go (NewEquality la (snd r) : neweqs) lexts'     rmisses  rs
         []
