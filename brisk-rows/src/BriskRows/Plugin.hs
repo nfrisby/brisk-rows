@@ -17,6 +17,7 @@ import           Data.Functor ((<&>))
 import qualified Data.List.NonEmpty as NE
 import           Data.Map (Map)
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import           Data.Maybe (mapMaybe)
 import           Data.Traversable (forM)
 
@@ -84,7 +85,8 @@ plugin = GhcPlugins.defaultPlugin
             doTrace env $ text $ "\n\n\n==========INCOMING\n"
             doTrace env $ ppr $ gs <> ws
 
-            let gidx = indexGivens env gs
+            let gidx          = indexGivens env gs
+                given_contras = checkGivens gidx
 
             -- only work on the Givens if there are no Wanteds
             let cts = if null ws then gs else ws
@@ -105,6 +107,7 @@ plugin = GhcPlugins.defaultPlugin
             newIrrels <- mapM (newIrrel env evBindsVar) recipes
 
             doTrace env $ text $ "\n\n\n==========CONTRADICTIONS\n"
+            doTrace env $ ppr given_contras
             doTrace env $ ppr irrel_contras
 
             let dictRecipes = mapMaybe (simplifyDict env famInstEnvs gidx) cts
@@ -115,11 +118,11 @@ plugin = GhcPlugins.defaultPlugin
             (solvedDicts, newDictss) <- fmap unzip $ mapM (newDict env evBindsVar) dictRecipes
 
             pure TcPluginSolveResult {
-                tcPluginInsolubleCts = irrel_contras
+                tcPluginInsolubleCts = if null given_contras then irrel_contras else given_contras
               ,
-                tcPluginSolvedCts    = map (oldIrrel env) recipes <> solvedDicts
+                tcPluginSolvedCts    = map (oldIrrel env) recipes ++ solvedDicts
               ,
-                tcPluginNewCts       = concat newIrrels <> concat newDictss
+                tcPluginNewCts       = concat newIrrels ++ concat newDictss
               }
       }
   }
@@ -137,7 +140,7 @@ newtype RowVarLTs = RowVarLTs (Map NonDetTcType (Map NonDetTcType TcEvidence.EvE
 -- | An index of the 'CEqCan's that are elimnating extensions.
 --
 -- TODO when would it be productive to consider many possible extensions?
-newtype RowVarDefns = RowVarDefns (Map NonDetTcType (NE.NonEmpty Extension))
+newtype RowVarDefns = RowVarDefns (Map NonDetTcType (NE.NonEmpty (Ct, Extension)))
 
 data GivensIndex = GivensIndex RowVarLTs RowVarDefns
 
@@ -179,13 +182,41 @@ indexGivens env =
           , eqType k k' && eqType v v'
 
           , let ext  = Extend k v nm a rho
-          , let acc' = Map.insertWith (<>) (NonDetTcType cc_rhs) (ext NE.:| []) acc_extEq
+          , let acc' = Map.insertWith (<>) (NonDetTcType cc_rhs) ((,) ct ext NE.:| []) acc_extEq
           -> go acc_knownLT acc' cts
 
 
 
           | otherwise
           -> go acc_knownLT acc_extEq cts
+
+checkGivens :: GivensIndex -> [Ct]
+checkGivens gidx =
+    go $ map (bounded [] Set.empty) (Map.toList m)
+  where
+    GivensIndex _rowVarLTs (RowVarDefns m) = gidx
+
+    go = \case
+        []     -> []
+        xs:xss -> if null xs then go xss else xs
+
+    bounded path visited (rhs, exts) =
+        go [ bounded1 path (Set.insert rhs visited) ct ext | (ct, ext) <- NE.toList exts ]
+
+    bounded1 path visited ct ext
+        | Set.member rhs' visited
+        = path'
+
+        | Just exts' <- Map.lookup rhs' m
+        = bounded path' visited (rhs', exts')
+
+        | otherwise = []
+      where
+        Extend _k _v _nm _a rho = ext
+
+        rhs' = NonDetTcType rho
+
+        path' = ct : path
 
 -----
 
@@ -529,7 +560,7 @@ getExtend env gidx ty
     , eqType k k' && eqType v v'
     = Just $ Extend k v nm a rho
 
-    | Just (ext NE.:| []) <- Map.lookup (NonDetTcType ty) m
+    | Just ((,) _ct ext NE.:| []) <- Map.lookup (NonDetTcType ty) m
     = Just ext
 
     | otherwise
@@ -1006,8 +1037,8 @@ improve env famInstEnvs gidx ct
 
     goEq lhs rhs = case (getExtend env gidx lhs, getExtend env gidx rhs) of
         (Nothing,   Nothing  ) -> NoStep
-        (Just{},    Nothing  ) -> if isEmp env rhs then Contra else NoStep
-        (Nothing,   Just{}   ) -> if isEmp env lhs then Contra else NoStep
+        (Just ext,  Nothing  ) -> if isEmp env rhs || eqType (fst (peel env gidx ext)) rhs then Contra else NoStep
+        (Nothing,   Just ext ) -> if isEmp env lhs || eqType lhs (fst (peel env gidx ext)) then Contra else NoStep
         (Just lext, Just rext) ->
             -- wait for kinds to match
             if not (sameKinds lext rext) then NoStep else
@@ -1124,6 +1155,9 @@ isRearranged env famInstEnvs gidx lext rext =
 
             | null neweqs
             -> NoStep
+
+            | same, len lexts /= length rmisses
+            -> Contra
 
             | otherwise
             -> Step $
